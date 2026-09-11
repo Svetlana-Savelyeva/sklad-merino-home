@@ -393,19 +393,26 @@ const hasPreviewStorage = typeof window !== "undefined" && !!window.storage;
 const PREVIEW_STORAGE_KEY = "warehouse:state";
 
 // Библиотеку Supabase подключаем динамически и только если реально заполнены
-// ссылка и ключ — так в предпросмотре здесь, где этой библиотеки физически
-// нет, приложение даже не пытается её загрузить и не падает. На настоящем
-// сайте (после сборки через Vite/Netlify) она подключится нормально.
+// ссылка и ключ. Если сама загрузка библиотеки не удалась (например, здесь,
+// в предпросмотре Claude, где этой библиотеки физически нет) — тихо
+// откатываемся на запасное хранилище вместо того, чтобы зависнуть или упасть.
+// На настоящем сайте (после сборки через Vite/Netlify) она подключится нормально.
 let supabaseClient = null;
 let supabaseInitPromise = null;
 const getSupabase = async () => {
   if (!isSupabaseConfigured) return null;
   if (supabaseClient) return supabaseClient;
   if (!supabaseInitPromise) {
-    supabaseInitPromise = import("@supabase/supabase-js").then(({ createClient }) => {
-      supabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      return supabaseClient;
-    });
+    supabaseInitPromise = (async () => {
+      try {
+        const mod = await import("@supabase/supabase-js");
+        supabaseClient = mod.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        return supabaseClient;
+      } catch (e) {
+        console.warn("Supabase недоступен в этом окружении, используем запасное хранилище:", e);
+        return null;
+      }
+    })();
   }
   return supabaseInitPromise;
 };
@@ -470,10 +477,14 @@ export default function WarehouseApp() {
   const [changeLog, setChangeLog] = useState([]);
   const [role, setRole] = useState(null); // null = не авторизован, показываем экран входа
   const [tab, setTab] = useState("catalog");
+  // Фильтр каталога — включается кликом по wallet-карточкам ("Товарных
+  // позиций" → catalogFilter = "inStock", "Нужно пополнить" → "lowStock"),
+  // сбрасывается вручную (крестиком) или при обычном переходе по навигации.
+  const [catalogFilter, setCatalogFilter] = useState(null); // null | "inStock" | "lowStock"
   // Наценка на логистику поверх реальной себестоимости расходников.
   // Хранится как доля (0.2 = 20%) и применяется только к стоимости ВЫДАННЫХ
   // материалов в отчётах — так видно и себестоимость, и сумму к учёту, и саму маржу.
-  const [markupRate, setMarkupRate] = useState(0.2);
+  const [markupRate, setMarkupRate] = useState(0.3);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
 
@@ -547,7 +558,7 @@ export default function WarehouseApp() {
       const finalAssetTransfers = loaded?.assetTransfers ?? seedAssetTransfers;
       const finalWarehouses = loaded?.warehouses ?? seedWarehouses;
       const finalChangeLog = loaded?.changeLog ?? [];
-      const finalRate = loaded?.markupRate ?? 0.2;
+      const finalRate = loaded?.markupRate ?? 0.3;
 
       setItems(finalItems);
       setIssues(finalIssues);
@@ -587,6 +598,12 @@ export default function WarehouseApp() {
   // не пытаются открыть раздел, недоступный текущей роли.
   const goTo = (nextTab) => {
     if (allowedTabs.includes(nextTab)) setTab(nextTab);
+  };
+
+  const goToCatalogFiltered = (filterMode) => {
+    if (!allowedTabs.includes("catalog")) return;
+    setCatalogFilter(filterMode);
+    setTab("catalog");
   };
 
   const lowStockCount = items.filter((i) => i.quantity <= i.minQuantity).length;
@@ -715,6 +732,14 @@ export default function WarehouseApp() {
     logChange("Изменена наценка на логистику", `${Math.round(rate * 100)}%`, { markupRate: rate });
   };
 
+  // Полная очистка журнала выдач — для тестовых/демонстрационных записей,
+  // которые не должны попасть в реальную историю и отчёты. Остатки и
+  // себестоимость товаров этим не трогаются, очищается только сам журнал.
+  const clearIssues = () => {
+    setIssues([]);
+    logChange("Очищен журнал выдач", `Удалено записей: ${issues.length}`, { issues: [] });
+  };
+
   // Инвентарь: новый тип оборудования — весь стартовый объём считается
   // лежащим на складе (никаких перемещений ещё не было).
   const addAssetType = (name, totalQuantity) => {
@@ -790,6 +815,11 @@ export default function WarehouseApp() {
         )}
 
         <div className="wh-hero-sheet">
+          <div className="wh-role-badge">
+            <span>{ROLES[role].emoji} {ROLES[role].label}</span>
+            <button className="wh-logout-btn" onClick={logOut}>Выйти</button>
+          </div>
+
           <div className="wh-hero-nav">
             <div className="wh-brand">
               <div className="wh-brand-badge"><img src={MERINO_LOGO} alt="Merino Home" /></div>
@@ -799,41 +829,21 @@ export default function WarehouseApp() {
               </div>
             </div>
 
-            <nav className="wh-tab-pill">
-              {allowedTabs.map((t) => (
-                <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
-                  {TAB_META[t].emoji} {TAB_META[t].label}
-                </button>
-              ))}
-            </nav>
-
-            <div className="wh-role-badge">
-              <span>{ROLES[role].emoji} {ROLES[role].label}</span>
-              <button className="wh-logout-btn" onClick={logOut}>Выйти</button>
+            <div className="wh-tab-pill-wrap">
+              <nav className="wh-tab-pill">
+                {allowedTabs.map((t) => (
+                  <button key={t} className={tab === t ? "active" : ""} onClick={() => { setCatalogFilter(null); setTab(t); }}>
+                    {TAB_META[t].emoji} {TAB_META[t].label}
+                  </button>
+                ))}
+              </nav>
             </div>
           </div>
-
-          {role === "admin" && (
-            <div className="wh-hero-stats">
-              <div className="wh-hero-stat">
-                <span className="wh-hero-stat-icon"><Package size={14} /></span>
-                <div><strong>{num(items.length)}</strong><small>Позиций на складе</small></div>
-              </div>
-              <div className="wh-hero-stat">
-                <span className="wh-hero-stat-icon"><TrendingUp size={14} /></span>
-                <div><strong>{rub(totalValue)}</strong><small>Стоимость остатков</small></div>
-              </div>
-              <div className={`wh-hero-stat ${lowStockCount ? "warn" : ""}`}>
-                <span className="wh-hero-stat-icon"><AlertTriangle size={14} /></span>
-                <div><strong>{num(lowStockCount)}</strong><small>Требуют пополнения</small></div>
-              </div>
-            </div>
-          )}
         </div>
 
         {role === "admin" && (
           <div className="wh-wallet-row">
-            <button className="wh-wallet-card orange" onClick={() => goTo("catalog")}>
+            <button className="wh-wallet-card orange" onClick={() => goToCatalogFiltered("inStock")}>
               <div className="wh-wallet-icon">📦</div>
               <div className="w-label">Товарных позиций</div>
               <div className="w-value">{num(items.length)}</div>
@@ -845,7 +855,7 @@ export default function WarehouseApp() {
               <div className="w-value">{rub(totalValue)}</div>
               <div className="w-sub">по текущей себестоимости</div>
             </button>
-            <button className="wh-wallet-card cyan" onClick={() => goTo("catalog")}>
+            <button className="wh-wallet-card cyan" onClick={() => goToCatalogFiltered("lowStock")}>
               <div className="wh-wallet-icon">⚠️</div>
               <div className="w-label">Нужно пополнить</div>
               <div className="w-value">{num(lowStockCount)}</div>
@@ -872,6 +882,8 @@ export default function WarehouseApp() {
               onEdit={editItem}
               onReceiveStock={receiveStock}
               onReceiveNewItem={receiveNewItem}
+              stockFilter={catalogFilter}
+              onClearStockFilter={() => setCatalogFilter(null)}
             />
           )}
           {(role === "admin" || role === "warehouse") && tab === "issue" && (
@@ -883,6 +895,7 @@ export default function WarehouseApp() {
               onIssue={issueItem}
               onAddObject={addObject}
               onToggleObjectActive={toggleObjectActive}
+              onClearIssues={clearIssues}
             />
           )}
           {(role === "admin" || role === "warehouse") && tab === "assets" && (
@@ -964,16 +977,21 @@ function LoginGate({ onLogIn }) {
 
 // ---------- Catalog ----------
 
-function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onEdit, onReceiveStock, onReceiveNewItem }) {
+function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onEdit, onReceiveStock, onReceiveNewItem, stockFilter, onClearStockFilter }) {
   const [query, setQuery] = useState("");
   const [openForm, setOpenForm] = useState(null); // null | "new" | "receive"
   const [collapsed, setCollapsed] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [receiptFilter, setReceiptFilter] = useState("");
 
-  const filtered = items.filter((i) =>
-    (i.name + i.category).toLowerCase().includes(query.toLowerCase())
-  );
+  const filtered = items.filter((i) => {
+    const matchesQuery = (i.name + i.category).toLowerCase().includes(query.toLowerCase());
+    const matchesFilter =
+      stockFilter === "inStock" ? i.quantity > 0 :
+      stockFilter === "lowStock" ? i.quantity <= i.minQuantity :
+      true;
+    return matchesQuery && matchesFilter;
+  });
 
   const byCategory = CATEGORIES.map((cat) => ({
     cat,
@@ -1024,6 +1042,19 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
+
+      {stockFilter === "inStock" && (
+        <div className="wh-filter-chip">
+          <Package size={13} /> Только позиции в наличии
+          <button onClick={onClearStockFilter} title="Убрать фильтр"><X size={13} /></button>
+        </div>
+      )}
+      {stockFilter === "lowStock" && (
+        <div className="wh-filter-chip warn">
+          <AlertTriangle size={13} /> Только то, что нужно пополнить
+          <button onClick={onClearStockFilter} title="Убрать фильтр"><X size={13} /></button>
+        </div>
+      )}
 
       {openForm === "new" && (
         <ReceiveForm
@@ -1151,7 +1182,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
                   <span className="wh-mono">{item ? fmtQty(r.qty, item.unit) : num(r.qty)}</span>
                   <span className="wh-mono wh-strong">{rub(r.unitCost)}</span>
                   <span className="wh-mono">{rub(r.totalCost)}</span>
-                  <span className="wh-col-name wh-muted">{r.supplier || "—"}</span>
+                  <span className="wh-col-name wh-col-wrap wh-muted" title={r.supplier || ""}>{r.supplier || "—"}</span>
                 </div>
               );
             })}
@@ -1431,7 +1462,7 @@ function EditItemForm({ item, onSave, onClose }) {
 
 // ---------- Issue ----------
 
-function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggleObjectActive }) {
+function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggleObjectActive, onClearIssues }) {
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [objectId, setObjectId] = useState("");
   const [qty, setQty] = useState("1");
@@ -1440,6 +1471,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
   const [showObjects, setShowObjects] = useState(false);
   const [newNumber, setNewNumber] = useState("");
   const [newName, setNewName] = useState("");
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   const activeObjects = [...objects].filter((o) => o.active).sort((a, b) => a.number.localeCompare(b.number, "ru", { numeric: true }));
   const allObjectsSorted = [...objects].sort((a, b) => a.number.localeCompare(b.number, "ru", { numeric: true }));
@@ -1584,6 +1616,19 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
           <Search size={14} />
           <input placeholder="Фильтр по объекту или материалу" value={filter} onChange={(e) => setFilter(e.target.value)} />
         </div>
+        {role === "admin" && issues.length > 0 && (
+          confirmingClear ? (
+            <div className="wh-inline-confirm">
+              <span>Удалить {issues.length} записей?</span>
+              <button className="wh-btn-writeoff-submit" onClick={() => { onClearIssues(); setConfirmingClear(false); }}>Да, очистить</button>
+              <button className="wh-btn-ghost" onClick={() => setConfirmingClear(false)}>Отмена</button>
+            </div>
+          ) : (
+            <button className="wh-icon-btn-danger" onClick={() => setConfirmingClear(true)} title="Очистить журнал выдач">
+              <Trash2 size={15} />
+            </button>
+          )
+        )}
       </div>
 
       <div className="wh-table">
@@ -1602,7 +1647,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
             <span className="wh-col-name">{s.itemName}</span>
             <span className="wh-mono">{num(s.qty)}</span>
             <span className="wh-mono wh-strong">{rub(s.cost)}</span>
-            <span className="wh-col-name wh-muted">{s.note || "—"}</span>
+            <span className="wh-col-name wh-col-wrap wh-muted" title={s.note || ""}>{s.note || "—"}</span>
           </div>
         ))}
         {filteredLog.length === 0 && <div className="wh-empty">Записей не найдено</div>}
@@ -1630,6 +1675,7 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
 
   const [restockForId, setRestockForId] = useState(null);
   const [restockQty, setRestockQty] = useState("");
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
 
   const [filter, setFilter] = useState("");
 
@@ -1814,13 +1860,21 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
                     </>
                   )}
                   {role === "admin" && (
-                    <button
-                      className="wh-icon-btn"
-                      onClick={() => { if (window.confirm(`Удалить тип «${asset.name}» из реестра? Журнал перемещений сохранится.`)) onRemoveAssetType(asset.id); }}
-                      title="Удалить тип инвентаря"
-                    >
-                      <X size={15} />
-                    </button>
+                    confirmingDeleteId === asset.id ? (
+                      <span className="wh-inline-confirm wh-inline-confirm-tight">
+                        <span>Удалить?</span>
+                        <button className="wh-btn-writeoff-submit" onClick={() => { onRemoveAssetType(asset.id); setConfirmingDeleteId(null); }}>Да</button>
+                        <button className="wh-btn-ghost" onClick={() => setConfirmingDeleteId(null)}>Нет</button>
+                      </span>
+                    ) : (
+                      <button
+                        className="wh-icon-btn"
+                        onClick={() => setConfirmingDeleteId(asset.id)}
+                        title="Удалить тип инвентаря"
+                      >
+                        <X size={15} />
+                      </button>
+                    )
                   )}
                 </div>
               </div>
@@ -1913,7 +1967,7 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
             <span className="wh-col-name">{t.fromLabel}</span>
             <span className="wh-col-name">{t.toLabel}</span>
             <span className="wh-mono">{num(t.quantity)}</span>
-            <span className="wh-col-name wh-muted">{t.note || "—"}</span>
+            <span className="wh-col-name wh-col-wrap wh-muted" title={t.note || ""}>{t.note || "—"}</span>
           </div>
         ))}
         {historyWithNames.length === 0 && <div className="wh-empty">Перемещений пока не было</div>}
@@ -2302,7 +2356,7 @@ function AuditLogView({ log }) {
             <span className="wh-mono wh-muted">{fmtDateTime(entry.date)}</span>
             <span>{ROLES[entry.role]?.emoji} {ROLES[entry.role]?.label || entry.role}</span>
             <span className="wh-col-name wh-strong">{entry.action}</span>
-            <span className="wh-col-name wh-muted">{entry.details}</span>
+            <span className="wh-col-name wh-col-wrap wh-muted" title={entry.details}>{entry.details}</span>
           </div>
         ))}
         {filtered.length === 0 && <div className="wh-empty">{log.length === 0 ? "Изменений пока не было" : "Ничего не найдено"}</div>}
@@ -2390,9 +2444,9 @@ html, body, #root {
 .wh-strong { font-weight: 700; }
 
 /* ---- hero sheet ---- */
-.wh-hero-sheet { background: var(--white); border-radius: 26px; box-shadow: var(--shadow-lg); padding: 22px 24px 24px; margin-bottom: 18px; }
-.wh-hero-nav { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 20px; }
-.wh-brand { display: flex; align-items: center; gap: 10px; }
+.wh-hero-sheet { position: relative; background: var(--white); border-radius: 26px; box-shadow: var(--shadow-lg); padding: 22px 24px 24px; margin-bottom: 18px; }
+.wh-hero-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 20px; }
+.wh-brand { display: flex; align-items: center; gap: 10px; padding-right: 120px; }
 .wh-brand-badge {
   width: 36px; height: 36px; border-radius: 11px;
   background: #EEF0FF; color: var(--indigo-dark);
@@ -2404,7 +2458,15 @@ html, body, #root {
 .wh-brand-title { font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 15px; line-height: 1.2; }
 .wh-brand-sub { font-size: 11.5px; color: var(--muted); font-weight: 500; margin-top: 2px; }
 
-.wh-tab-pill { display: inline-flex; gap: 4px; background: #F6F8FC; border-radius: 999px; padding: 4px; }
+/* Обёртка вкладок — растягивается на всё оставшееся место и режет
+   переполнение, чтобы затухающий край подсказывал: тут можно листать вбок. */
+.wh-tab-pill-wrap { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; border-radius: 999px; }
+.wh-tab-pill-wrap::after {
+  content: ""; position: absolute; top: 0; right: 0; bottom: 0; width: 28px;
+  background: linear-gradient(to right, rgba(246,248,252,0), #F6F8FC 80%);
+  pointer-events: none;
+}
+.wh-tab-pill { display: inline-flex; gap: 4px; background: #F6F8FC; border-radius: 999px; padding: 4px; max-width: 100%; overflow-x: auto; }
 .wh-tab-pill button {
   border: none; background: transparent; cursor: pointer;
   font-family: 'Inter', sans-serif; font-weight: 600; font-size: 13px;
@@ -2414,17 +2476,15 @@ html, body, #root {
 .wh-tab-pill button:hover { color: var(--indigo-dark); }
 .wh-tab-pill button.active { background: var(--indigo); color: #fff; box-shadow: var(--shadow-sm); }
 
-.wh-role-badge { display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text); font-weight: 600; margin-left: auto; background: #F6F8FC; border-radius: 999px; padding: 7px 8px 7px 14px; }
+/* Бейдж роли — всегда в правом верхнем углу карточки, независимо от того,
+   как переносится остальная навигация на узких экранах. */
+.wh-role-badge {
+  position: absolute; top: 22px; right: 24px; z-index: 2;
+  display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text); font-weight: 600;
+  background: #F6F8FC; border-radius: 999px; padding: 7px 8px 7px 14px;
+}
 .wh-logout-btn { border: none; background: #fff; color: var(--muted); font: inherit; font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px; cursor: pointer; box-shadow: var(--shadow-sm); }
 .wh-logout-btn:hover { color: var(--neg); }
-
-.wh-hero-stats { display: flex; gap: 12px; flex-wrap: wrap; }
-.wh-hero-stat { display: flex; align-items: center; gap: 10px; background: #F6F8FC; border-radius: 14px; padding: 10px 16px; flex: 1 1 auto; min-width: 160px; }
-.wh-hero-stat-icon { width: 30px; height: 30px; border-radius: 9px; background: #E4E9FB; color: var(--indigo-dark); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.wh-hero-stat strong { display: block; font-family: 'Poppins', sans-serif; font-size: 14.5px; font-weight: 700; }
-.wh-hero-stat small { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
-.wh-hero-stat.warn .wh-hero-stat-icon { background: #FDEDEA; color: var(--neg); }
-.wh-hero-stat.warn strong { color: var(--neg); }
 
 /* ---- wallet cards ---- */
 .wh-wallet-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
@@ -2506,6 +2566,14 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 }
 .wh-btn-writeoff-submit:hover { background: #D6553F; }
 
+.wh-inline-confirm {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: #FDEDEA; border-radius: 999px; padding: 8px 8px 8px 16px;
+  font-size: 12.5px; font-weight: 600; color: var(--neg);
+}
+.wh-inline-confirm-tight { padding: 4px 4px 4px 10px; gap: 6px; font-size: 12px; }
+.wh-inline-confirm .wh-btn-writeoff-submit, .wh-inline-confirm .wh-btn-ghost { padding: 6px 12px; font-size: 12px; }
+
 .wh-search {
   display: flex; align-items: center; gap: 8px;
   background: #F6F8FC; border: 1px solid var(--line);
@@ -2514,6 +2582,16 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 }
 .wh-search input { border: none; outline: none; background: transparent; font: inherit; color: var(--text); width: 100%; font-family: 'Inter', sans-serif; }
 .wh-search-small { max-width: 280px; padding: 7px 12px; margin-bottom: 0; }
+
+.wh-filter-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: #EEF0FF; color: var(--indigo-dark); font-size: 12.5px; font-weight: 600;
+  padding: 7px 8px 7px 14px; border-radius: 999px; margin-bottom: 18px;
+}
+.wh-filter-chip button { border: none; background: rgba(255,255,255,0.6); color: var(--indigo-dark); border-radius: 999px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.wh-filter-chip button:hover { background: #fff; }
+.wh-filter-chip.warn { background: #FDEDEA; color: var(--neg); }
+.wh-filter-chip.warn button { color: var(--neg); }
 
 /* ---- panel / form ---- */
 .wh-panel { background: var(--white); border-radius: 22px; box-shadow: var(--shadow-sm); padding: 22px 24px; margin-bottom: 22px; }
@@ -2572,6 +2650,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-row-head { background: #F8F9FC; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; padding: 12px 16px; }
 .wh-row-low { background: #FDF1EF; }
 .wh-col-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wh-col-wrap { white-space: normal; word-break: break-word; line-height: 1.4; align-self: center; }
 
 .wh-qty-cell { display: flex; align-items: center; gap: 6px; }
 .wh-qty-btn {
@@ -2585,6 +2664,14 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-badge-low { display: inline-flex; align-items: center; gap: 4px; color: var(--neg); font-size: 11px; font-weight: 700; background: #FDEDEA; padding: 3px 8px; border-radius: 999px; }
 .wh-icon-btn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 5px; border-radius: 8px; display: inline-flex; }
 .wh-icon-btn:hover { background: #EEF0FF; color: var(--indigo-dark); }
+
+.wh-icon-btn-danger {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 999px; flex-shrink: 0;
+  background: #FDEDEA; border: 1px solid #F3C4B8; color: var(--neg); cursor: pointer;
+  transition: background .15s ease;
+}
+.wh-icon-btn-danger:hover { background: #FBDFD9; }
 
 .wh-empty { padding: 26px; text-align: center; color: var(--muted); font-size: 13.5px; }
 
@@ -2705,6 +2792,10 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   .wh-wallet-row { grid-template-columns: 1fr; }
   .wh-stat-cards { grid-template-columns: 1fr; }
   .wh-hero-nav { flex-direction: column; align-items: flex-start; }
-  .wh-tab-pill { width: 100%; overflow-x: auto; }
+  .wh-brand { padding-right: 96px; }
+  .wh-tab-pill-wrap { width: 100%; flex: 1 1 100%; }
+  .wh-role-badge { top: 20px; right: 16px; padding: 5px 6px 5px 10px; gap: 6px; }
+  .wh-role-badge span { font-size: 11px; }
+  .wh-logout-btn { padding: 5px 9px; font-size: 10.5px; }
 }
 `;
