@@ -2638,14 +2638,15 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-cat-count { background: #EEF0FF; color: var(--indigo-dark); font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
 .wh-cat-value { margin-left: auto; font-family: 'Poppins', sans-serif; font-size: 13px; color: var(--muted); font-weight: 600; }
 
-.wh-table { background: var(--white); border-radius: 20px; box-shadow: var(--shadow-sm); overflow: hidden; }
+.wh-table { background: var(--white); border-radius: 20px; box-shadow: var(--shadow-sm); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
 .wh-row {
   display: grid; grid-template-columns: 2fr 132px 60px 90px 100px 130px;
   align-items: center; gap: 10px; padding: 12px 16px;
   border-bottom: 1px solid var(--line); font-size: 13.5px; font-family: 'Inter', sans-serif;
+  min-width: 600px;
 }
-.wh-row-log { grid-template-columns: 92px 96px 1.6fr 70px 90px 1.6fr; }
-.wh-row-receipt { grid-template-columns: 92px 1.8fr 110px 90px 110px 1.4fr; }
+.wh-row-log { grid-template-columns: 92px 96px 1.6fr 70px 90px 1.6fr; min-width: 560px; }
+.wh-row-receipt { grid-template-columns: 92px 1.8fr 110px 90px 110px 1.4fr; min-width: 620px; }
 .wh-row:last-child { border-bottom: none; }
 .wh-row-head { background: #F8F9FC; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; padding: 12px 16px; }
 .wh-row-low { background: #FDF1EF; }
@@ -2697,8 +2698,8 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 }
 .wh-asset-transfer-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 
-.wh-row-transfer { grid-template-columns: 92px 1.3fr 1.3fr 1.3fr 70px 1.4fr; }
-.wh-row-audit { grid-template-columns: 140px 170px 1.2fr 1.8fr; }
+.wh-row-transfer { grid-template-columns: 92px 1.3fr 1.3fr 1.3fr 70px 1.4fr; min-width: 680px; }
+.wh-row-audit { grid-template-columns: 140px 170px 1.2fr 1.8fr; min-width: 640px; }
 
 /* ---- issue log ---- */
 .wh-log-header { display: flex; justify-content: space-between; align-items: center; margin: 28px 0 14px; flex-wrap: wrap; gap: 10px; }
