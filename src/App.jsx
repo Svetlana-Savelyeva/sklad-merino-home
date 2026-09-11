@@ -2792,9 +2792,13 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   .wh-wallet-row { grid-template-columns: 1fr; }
   .wh-stat-cards { grid-template-columns: 1fr; }
   .wh-hero-nav { flex-direction: column; align-items: flex-start; }
-  .wh-brand { padding-right: 96px; }
+  .wh-brand { padding-right: 0; }
   .wh-tab-pill-wrap { width: 100%; flex: 1 1 100%; }
-  .wh-role-badge { top: 20px; right: 16px; padding: 5px 6px 5px 10px; gap: 6px; }
+  .wh-role-badge {
+    position: static; top: auto; right: auto;
+    display: inline-flex; margin-bottom: 14px;
+    padding: 5px 6px 5px 10px; gap: 6px;
+  }
   .wh-role-badge span { font-size: 11px; }
   .wh-logout-btn { padding: 5px 9px; font-size: 10.5px; }
 }
