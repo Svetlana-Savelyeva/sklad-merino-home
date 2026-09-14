@@ -144,6 +144,11 @@ const seedWarehouses = [
   { id: "warehouse2", name: "Склад 2" },
 ];
 
+// Справочник вариантов закупки по позиции ("где смотрели и почём", ещё до
+// реальной покупки) — отдельно от "Истории поступлений", в которой уже
+// зафиксированные, реально свершившиеся закупки.
+const seedPurchaseOptions = [];
+
 // ---------- helpers ----------
 
 const rub = (n) =>
@@ -207,7 +212,7 @@ const downloadWorkbook = (sheets, filename) => {
 
 // Полная выгрузка всех накопленных данных склада: каталог, журнал выдач,
 // журнал поступлений и реестр объектов — каждое на отдельном листе.
-const exportAllData = (items, issues, receipts, objects) => {
+const exportAllData = (items, issues, receipts, objects, purchaseOptions = []) => {
   const itemRows = items.map((i) => ({
     "Наименование": i.name,
     "Категория": i.category,
@@ -243,12 +248,22 @@ const exportAllData = (items, issues, receipts, objects) => {
     "Статус": o.active ? "Активен" : "Выбыл",
   }));
 
+  const purchaseOptionRows = purchaseOptions.map((o) => ({
+    "Материал": items.find((i) => i.id === o.itemId)?.name || "—",
+    "Поставщик / магазин": o.source,
+    "Цена, ₽": o.price || "",
+    "Ссылка": o.url || "",
+    "Комментарий": o.note || "",
+    "Дата добавления": fmtDate(o.date),
+  }));
+
   downloadWorkbook(
     [
       { name: "Каталог", rows: itemRows },
       { name: "Журнал выдач", rows: issueRows },
       { name: "Журнал поступлений", rows: receiptRows },
       { name: "Объекты", rows: objectRows },
+      { name: "Варианты закупки", rows: purchaseOptionRows },
     ],
     `sklad-merino-home-${todayISO()}.xlsx`
   );
@@ -358,9 +373,9 @@ const exportAssets = (assets, transfers, objects, warehouses) => {
 // нужна авторизация на сервере с проверкой пароля вне браузера пользователя.
 
 const ROLES = {
-  admin: { label: "Администратор", emoji: "🛠️", password: "admin2026", tabs: ["catalog", "issue", "assets", "report", "audit"], defaultTab: "catalog" },
+  admin: { label: "Администратор", emoji: "🛠️", password: "admin2026", tabs: ["catalog", "issue", "assets", "report", "prices", "audit"], defaultTab: "catalog" },
   warehouse: { label: "Сотрудник склада", emoji: "📦", password: "sklad2026", tabs: ["issue", "assets"], defaultTab: "issue" },
-  finance: { label: "Финансовый отдел", emoji: "📊", password: "finotdel2026", tabs: ["report"], defaultTab: "report" },
+  finance: { label: "Финансовый отдел", emoji: "📊", password: "finotdel2026", tabs: ["report", "prices"], defaultTab: "report" },
 };
 
 const TAB_META = {
@@ -368,6 +383,7 @@ const TAB_META = {
   issue: { label: "Выдача", emoji: "📤" },
   assets: { label: "Инвентарь", emoji: "🛏️" },
   report: { label: "Отчёты", emoji: "📊" },
+  prices: { label: "Цены", emoji: "📈" },
   audit: { label: "Журнал", emoji: "📝" },
 };
 
@@ -475,6 +491,7 @@ export default function WarehouseApp() {
   const [assetTransfers, setAssetTransfers] = useState(seedAssetTransfers);
   const [warehouses, setWarehouses] = useState(seedWarehouses);
   const [changeLog, setChangeLog] = useState([]);
+  const [purchaseOptions, setPurchaseOptions] = useState(seedPurchaseOptions);
   const [role, setRole] = useState(null); // null = не авторизован, показываем экран входа
   const [tab, setTab] = useState("catalog");
   // Фильтр каталога — включается кликом по wallet-карточкам ("Товарных
@@ -520,6 +537,7 @@ export default function WarehouseApp() {
       assetTransfers: partial.assetTransfers ?? assetTransfers,
       warehouses: partial.warehouses ?? warehouses,
       changeLog: partial.changeLog ?? changeLog,
+      purchaseOptions: partial.purchaseOptions ?? purchaseOptions,
       markupRate: partial.markupRate ?? markupRate,
     };
     persistPayload(payload)
@@ -533,9 +551,11 @@ export default function WarehouseApp() {
   // Добавляет запись в журнал изменений и сразу сохраняет — используется всеми
   // административными действиями (правка/удаление позиций, объекты, инвентарь,
   // склады, наценка), которые не попадают ни в журнал выдач, ни в историю
-  // поступлений, ни в журнал перемещений инвентаря.
-  const logChange = (action, details, extra = {}) => {
-    const entry = { id: nextId("log"), date: nowStamp(), role, action, details };
+  // поступлений, ни в журнал перемещений инвентаря. Необязательный restorable —
+  // снимок удалённых данных ({ type, data }), чтобы запись можно было вернуть
+  // прямо из журнала.
+  const logChange = (action, details, extra = {}, restorable = null) => {
+    const entry = { id: nextId("log"), date: nowStamp(), role, action, details, restorable };
     const newLog = [entry, ...changeLog];
     setChangeLog(newLog);
     saveState({ changeLog: newLog, ...extra });
@@ -558,6 +578,7 @@ export default function WarehouseApp() {
       const finalAssetTransfers = loaded?.assetTransfers ?? seedAssetTransfers;
       const finalWarehouses = loaded?.warehouses ?? seedWarehouses;
       const finalChangeLog = loaded?.changeLog ?? [];
+      const finalPurchaseOptions = loaded?.purchaseOptions ?? seedPurchaseOptions;
       const finalRate = loaded?.markupRate ?? 0.3;
 
       setItems(finalItems);
@@ -568,6 +589,7 @@ export default function WarehouseApp() {
       setAssetTransfers(finalAssetTransfers);
       setWarehouses(finalWarehouses);
       setChangeLog(finalChangeLog);
+      setPurchaseOptions(finalPurchaseOptions);
       setMarkupRate(finalRate);
 
       // Если в базе ещё ничего не было (самый первый запуск) — сразу
@@ -576,7 +598,7 @@ export default function WarehouseApp() {
         persistPayload({
           items: finalItems, issues: finalIssues, receipts: finalReceipts, objects: finalObjects,
           assets: finalAssets, assetTransfers: finalAssetTransfers, warehouses: finalWarehouses,
-          changeLog: finalChangeLog, markupRate: finalRate,
+          changeLog: finalChangeLog, purchaseOptions: finalPurchaseOptions, markupRate: finalRate,
         }).catch((e) => console.error("Ошибка первичного сохранения:", e));
       }
 
@@ -703,7 +725,46 @@ export default function WarehouseApp() {
     const item = items.find((i) => i.id === id);
     const newItems = items.filter((i) => i.id !== id);
     setItems(newItems);
-    logChange("Удалена позиция каталога", `«${item?.name || id}»`, { items: newItems });
+    logChange(
+      "Удалена позиция каталога",
+      `«${item?.name || id}»`,
+      { items: newItems },
+      item ? { type: "item", data: item } : null
+    );
+  };
+
+  // Возвращает ранее удалённую позицию обратно в каталог — с тем же id,
+  // что и раньше, чтобы старые поступления/выдачи по ней снова "увидели"
+  // название товара, а не показывали "—".
+  const restoreItem = (itemData) => {
+    if (items.some((i) => i.id === itemData.id)) return; // уже есть, не дублируем
+    const newItems = [itemData, ...items];
+    setItems(newItems);
+    logChange("Восстановлена позиция каталога", `«${itemData.name}»`, { items: newItems });
+  };
+
+  // Справочник вариантов закупки по позиции — где смотрели, почём и по какой
+  // ссылке, ещё до фактической покупки. Отдельно от "Истории поступлений",
+  // где фиксируются уже совершённые закупки.
+  const addPurchaseOption = (itemId, data) => {
+    const newOption = {
+      id: nextId("po"),
+      itemId,
+      source: data.source.trim(),
+      url: data.url.trim(),
+      price: data.price,
+      note: data.note.trim(),
+      date: todayISO(),
+    };
+    const newOptions = [newOption, ...purchaseOptions];
+    setPurchaseOptions(newOptions);
+    saveState({ purchaseOptions: newOptions });
+  };
+
+  const removePurchaseOption = (id) => {
+    const newOptions = purchaseOptions.filter((o) => o.id !== id);
+    setPurchaseOptions(newOptions);
+    saveState({ purchaseOptions: newOptions });
   };
 
   const adjustQuantity = (id, delta) => {
@@ -884,6 +945,9 @@ export default function WarehouseApp() {
               onReceiveNewItem={receiveNewItem}
               stockFilter={catalogFilter}
               onClearStockFilter={() => setCatalogFilter(null)}
+              purchaseOptions={purchaseOptions}
+              onAddPurchaseOption={addPurchaseOption}
+              onRemovePurchaseOption={removePurchaseOption}
             />
           )}
           {(role === "admin" || role === "warehouse") && tab === "issue" && (
@@ -915,7 +979,12 @@ export default function WarehouseApp() {
           {(role === "admin" || role === "finance") && tab === "report" && (
             <ReportView items={items} issues={issues} role={role} markupRate={markupRate} onMarkupChange={changeMarkupRate} />
           )}
-          {role === "admin" && tab === "audit" && <AuditLogView log={changeLog} />}
+          {(role === "admin" || role === "finance") && tab === "prices" && (
+            <PriceTrendsView items={items} receipts={receipts} />
+          )}
+          {role === "admin" && tab === "audit" && (
+            <AuditLogView log={changeLog} items={items} onRestoreItem={restoreItem} />
+          )}
         </main>
       </div>
     </div>
@@ -977,12 +1046,31 @@ function LoginGate({ onLogIn }) {
 
 // ---------- Catalog ----------
 
-function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onEdit, onReceiveStock, onReceiveNewItem, stockFilter, onClearStockFilter }) {
+function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onEdit, onReceiveStock, onReceiveNewItem, stockFilter, onClearStockFilter, purchaseOptions, onAddPurchaseOption, onRemovePurchaseOption }) {
   const [query, setQuery] = useState("");
   const [openForm, setOpenForm] = useState(null); // null | "new" | "receive"
   const [collapsed, setCollapsed] = useState({});
   const [editingId, setEditingId] = useState(null);
   const [receiptFilter, setReceiptFilter] = useState("");
+  const [linksForId, setLinksForId] = useState(null);
+  const [newLinkSource, setNewLinkSource] = useState("");
+  const [newLinkUrl, setNewLinkUrl] = useState("");
+  const [newLinkPrice, setNewLinkPrice] = useState("");
+  const [newLinkNote, setNewLinkNote] = useState("");
+
+  const submitPurchaseOption = (itemId) => {
+    if (!newLinkSource.trim()) return;
+    onAddPurchaseOption(itemId, {
+      source: newLinkSource,
+      url: newLinkUrl,
+      price: Number(newLinkPrice) || 0,
+      note: newLinkNote,
+    });
+    setNewLinkSource("");
+    setNewLinkUrl("");
+    setNewLinkPrice("");
+    setNewLinkNote("");
+  };
 
   const filtered = items.filter((i) => {
     const matchesQuery = (i.name + i.category).toLowerCase().includes(query.toLowerCase());
@@ -1014,7 +1102,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
         <div className="wh-header-actions">
           <button
             className="wh-btn-icon-export"
-            onClick={() => exportAllData(items, issues, receipts, objects)}
+            onClick={() => exportAllData(items, issues, receipts, objects, purchaseOptions)}
             title="Выгрузить в Excel"
           >
             <FileSpreadsheet size={18} />
@@ -1060,6 +1148,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
         <ReceiveForm
           items={items}
           receipts={receipts}
+          purchaseOptions={purchaseOptions}
           initialMode="new"
           onReceiveStock={onReceiveStock}
           onReceiveNewItem={onReceiveNewItem}
@@ -1070,6 +1159,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
         <ReceiveForm
           items={items}
           receipts={receipts}
+          purchaseOptions={purchaseOptions}
           initialMode="existing"
           onReceiveStock={onReceiveStock}
           onReceiveNewItem={onReceiveNewItem}
@@ -1112,33 +1202,75 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
                 </div>
                 {list.map((item) => {
                   const low = item.quantity <= item.minQuantity;
+                  const itemOptions = purchaseOptions.filter((o) => o.itemId === item.id);
+                  const linksOpen = linksForId === item.id;
                   return (
-                    <div className={`wh-row ${low ? "wh-row-low" : ""}`} key={item.id}>
-                      <span className="wh-col-name">{item.name}</span>
-                      <span className="wh-qty-cell">
-                        <button className="wh-qty-btn" onClick={() => onAdjust(item.id, -1)}>−</button>
-                        <span className="wh-mono">
-                          {fmtQty(item.quantity, item.unit)}
-                        </span>
-                        <button className="wh-qty-btn" onClick={() => onAdjust(item.id, 1)}>+</button>
-                      </span>
-                      <span className="wh-mono wh-muted">{num(item.minQuantity)}</span>
-                      <span className="wh-mono">{rub(item.unitCost)}</span>
-                      <span className="wh-mono wh-strong">{rub(item.quantity * item.unitCost)}</span>
-                      <span className="wh-row-actions">
-                        {low && (
-                          <span className="wh-badge-low" title="Ниже минимального запаса">
-                            <AlertTriangle size={13} /> заказать
+                    <React.Fragment key={item.id}>
+                      <div className={`wh-row ${low ? "wh-row-low" : ""}`}>
+                        <span className="wh-col-name">{item.name}</span>
+                        <span className="wh-qty-cell">
+                          <button className="wh-qty-btn" onClick={() => onAdjust(item.id, -1)}>−</button>
+                          <span className="wh-mono">
+                            {fmtQty(item.quantity, item.unit)}
                           </span>
-                        )}
-                        <button className="wh-icon-btn" onClick={() => setEditingId(item.id)} title="Редактировать позицию">
-                          <Pencil size={14} />
-                        </button>
-                        <button className="wh-icon-btn" onClick={() => onRemove(item.id)} title="Удалить позицию">
-                          <Trash2 size={14} />
-                        </button>
-                      </span>
-                    </div>
+                          <button className="wh-qty-btn" onClick={() => onAdjust(item.id, 1)}>+</button>
+                        </span>
+                        <span className="wh-mono wh-muted">{num(item.minQuantity)}</span>
+                        <span className="wh-mono">{rub(item.unitCost)}</span>
+                        <span className="wh-mono wh-strong">{rub(item.quantity * item.unitCost)}</span>
+                        <span className="wh-row-actions">
+                          {low && (
+                            <span className="wh-badge-low" title="Ниже минимального запаса">
+                              <AlertTriangle size={13} /> заказать
+                            </span>
+                          )}
+                          <button
+                            className={`wh-icon-btn ${itemOptions.length > 0 ? "wh-icon-btn-active" : ""}`}
+                            onClick={() => setLinksForId(linksOpen ? null : item.id)}
+                            title="Варианты закупки (ссылки и цены)"
+                          >
+                            🔗{itemOptions.length > 0 && <span className="wh-link-count">{itemOptions.length}</span>}
+                          </button>
+                          <button className="wh-icon-btn" onClick={() => setEditingId(item.id)} title="Редактировать позицию">
+                            <Pencil size={14} />
+                          </button>
+                          <button className="wh-icon-btn" onClick={() => onRemove(item.id)} title="Удалить позицию">
+                            <Trash2 size={14} />
+                          </button>
+                        </span>
+                      </div>
+
+                      {linksOpen && (
+                        <div className="wh-purchase-links">
+                          {itemOptions.length > 0 && (
+                            <div className="wh-purchase-links-list">
+                              {itemOptions.map((o) => (
+                                <div className="wh-purchase-link-row" key={o.id}>
+                                  <span className="wh-col-name">
+                                    {o.url ? (
+                                      <a href={o.url} target="_blank" rel="noopener noreferrer">{o.source}</a>
+                                    ) : o.source}
+                                  </span>
+                                  <span className="wh-mono wh-strong">{o.price ? rub(o.price) : "—"}</span>
+                                  <span className="wh-col-name wh-muted">{o.note || "—"}</span>
+                                  <span className="wh-mono wh-muted">{fmtDate(o.date)}</span>
+                                  <button className="wh-icon-btn" onClick={() => onRemovePurchaseOption(o.id)} title="Удалить вариант">
+                                    <X size={13} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div className="wh-purchase-link-form">
+                            <input placeholder="Магазин / поставщик" value={newLinkSource} onChange={(e) => setNewLinkSource(e.target.value)} />
+                            <input placeholder="Ссылка (необязательно)" value={newLinkUrl} onChange={(e) => setNewLinkUrl(e.target.value)} />
+                            <input type="number" min="0" placeholder="Цена, ₽" value={newLinkPrice} onChange={(e) => setNewLinkPrice(e.target.value)} />
+                            <input placeholder="Комментарий" value={newLinkNote} onChange={(e) => setNewLinkNote(e.target.value)} />
+                            <button className="wh-btn-primary" onClick={() => submitPurchaseOption(item.id)}>Добавить</button>
+                          </div>
+                        </div>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </div>
@@ -1196,7 +1328,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
 
 const UNIT_OPTIONS = ["шт", "пара", "уп", "л", "кг"];
 
-function ReceiveForm({ items, receipts = [], initialMode = "existing", onReceiveStock, onReceiveNewItem, onClose }) {
+function ReceiveForm({ items, receipts = [], purchaseOptions = [], initialMode = "existing", onReceiveStock, onReceiveNewItem, onClose }) {
   const [mode, setMode] = useState(initialMode); // "existing" | "new"
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [supplier, setSupplier] = useState("");
@@ -1235,6 +1367,23 @@ function ReceiveForm({ items, receipts = [], initialMode = "existing", onReceive
   // Список уже встречавшихся поставщиков — для автоподсказки при вводе,
   // чтобы один и тот же поставщик не расползался на разные варианты написания.
   const supplierSuggestions = [...new Set(receipts.map((r) => r.supplier).filter(Boolean))];
+
+  // Самая выгодная известная цена по этой позиции — из реальных прошлых
+  // закупок и из справочника "Варианты закупки" (ссылки, которые ещё не
+  // покупали, но уже нашли). Если новая цена заметно выше — предупреждаем,
+  // чтобы сотрудник случайно не переплатил, просто заказав "там, где удобно".
+  const PRICE_WARNING_THRESHOLD = 0.15; // 15% дороже — уже повод обратить внимание
+  const cheapestKnown = mode === "existing"
+    ? [
+        ...receipts.filter((r) => r.itemId === itemId).map((r) => ({ price: r.unitCost, source: r.supplier || "прошлая закупка" })),
+        ...purchaseOptions.filter((o) => o.itemId === itemId && o.price > 0).map((o) => ({ price: o.price, source: o.source })),
+      ].sort((a, b) => a.price - b.price)[0]
+    : null;
+  const priceIsHigh =
+    cheapestKnown && unitPrice > 0 && unitPrice > cheapestKnown.price * (1 + PRICE_WARNING_THRESHOLD);
+  const priceOverPercent = cheapestKnown && unitPrice > 0
+    ? Math.round(((unitPrice - cheapestKnown.price) / cheapestKnown.price) * 100)
+    : 0;
 
   const newAvgCost =
     mode === "existing" && existingItem && qtyNum > 0
@@ -1383,6 +1532,17 @@ function ReceiveForm({ items, receipts = [], initialMode = "existing", onReceive
               <span className="wh-mono wh-strong">{rub(newAvgCost)}</span>
             </div>
           )}
+        </div>
+      )}
+
+      {priceIsHigh && (
+        <div className="wh-price-warning">
+          <AlertTriangle size={15} />
+          <span>
+            Внимание: цена {rub(unitPrice)} за единицу на <strong>{priceOverPercent}%</strong> выше самого выгодного
+            известного варианта — {rub(cheapestKnown.price)} ({cheapestKnown.source}). Проверьте, нет ли варианта дешевле,
+            прежде чем проводить приход.
+          </span>
         </div>
       )}
 
@@ -2315,8 +2475,96 @@ function ReportView({ items, issues, role, markupRate, onMarkupChange }) {
 
 // ---------- Audit log (журнал изменений) ----------
 
-function AuditLogView({ log }) {
+// ---------- Price trends (динамика цен) ----------
+
+function PriceTrendsView({ items, receipts }) {
+  const [expandedId, setExpandedId] = useState(null);
   const [filter, setFilter] = useState("");
+
+  // Для каждой позиции — история цен из реальных поступлений (не из
+  // справочника вариантов закупки, там могут быть непроверенные цены).
+  // Нужно минимум 2 закупки, чтобы вообще было что сравнивать.
+  const trends = useMemo(() => {
+    return items
+      .map((item) => {
+        const history = receipts
+          .filter((r) => r.itemId === item.id)
+          .sort((a, b) => a.date.localeCompare(b.date));
+        if (history.length < 2) return null;
+        const first = history[0];
+        const last = history[history.length - 1];
+        const change = ((last.unitCost - first.unitCost) / first.unitCost) * 100;
+        return { item, history, first, last, change };
+      })
+      .filter(Boolean)
+      .filter((t) => t.item.name.toLowerCase().includes(filter.toLowerCase()))
+      .sort((a, b) => b.change - a.change);
+  }, [items, receipts, filter]);
+
+  return (
+    <div>
+      <div className="wh-header">
+        <div>
+          <h1>📈 Динамика цен</h1>
+          <p className="wh-sub">
+            Себестоимость позиций от первой зафиксированной закупки до последней — чтобы вовремя
+            замечать, что что-то заметно подорожало
+          </p>
+        </div>
+      </div>
+
+      <div className="wh-search">
+        <Search size={16} />
+        <input placeholder="Найти по названию" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      </div>
+
+      {trends.length === 0 && (
+        <div className="wh-empty">
+          Пока недостаточно данных. Динамика появится, как только по одной и той же позиции наберётся
+          минимум две закупки в «Истории поступлений» — тогда будет с чем сравнивать.
+        </div>
+      )}
+
+      <div className="wh-price-trend-list">
+        {trends.map((t) => {
+          const isUp = t.change > 0;
+          const isBig = Math.abs(t.change) >= 15;
+          const isExpanded = expandedId === t.item.id;
+          const maxPoint = Math.max(...t.history.map((h) => h.unitCost));
+          return (
+            <div className="wh-price-trend-card" key={t.item.id}>
+              <button className="wh-price-trend-head" onClick={() => setExpandedId(isExpanded ? null : t.item.id)}>
+                <span className="wh-col-name wh-strong">{t.item.name}</span>
+                <span className="wh-mono wh-muted">{rub(t.first.unitCost)} → {rub(t.last.unitCost)}</span>
+                <span className={`wh-trend-badge ${isUp ? "up" : "down"} ${isBig ? "big" : ""}`}>
+                  {isBig && isUp && "⚠️ "}{isUp ? "▲" : "▼"} {Math.abs(Math.round(t.change))}%
+                </span>
+              </button>
+              {isExpanded && (
+                <div className="wh-price-trend-history">
+                  {t.history.map((r) => (
+                    <div className="wh-price-trend-point" key={r.id}>
+                      <span className="wh-mono wh-muted">{fmtDate(r.date)}</span>
+                      <div className="wh-bar-track">
+                        <div className="wh-bar-fill" style={{ width: `${(r.unitCost / maxPoint) * 100}%` }} />
+                      </div>
+                      <span className="wh-mono wh-strong">{rub(r.unitCost)}</span>
+                      <span className="wh-col-name wh-muted">{r.supplier || "—"}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AuditLogView({ log, items, onRestoreItem }) {
+  const [filter, setFilter] = useState("");
+  const [justRestored, setJustRestored] = useState(() => new Set());
 
   const filtered = log.filter((entry) => {
     const q = filter.toLowerCase();
@@ -2326,6 +2574,11 @@ function AuditLogView({ log }) {
       (ROLES[entry.role]?.label || "").toLowerCase().includes(q)
     );
   });
+
+  const handleRestore = (entry) => {
+    onRestoreItem(entry.restorable.data);
+    setJustRestored((prev) => new Set(prev).add(entry.id));
+  };
 
   return (
     <div>
@@ -2350,15 +2603,31 @@ function AuditLogView({ log }) {
           <span>Роль</span>
           <span className="wh-col-name">Действие</span>
           <span className="wh-col-name">Детали</span>
+          <span></span>
         </div>
-        {filtered.map((entry) => (
-          <div className="wh-row wh-row-audit" key={entry.id}>
-            <span className="wh-mono wh-muted">{fmtDateTime(entry.date)}</span>
-            <span>{ROLES[entry.role]?.emoji} {ROLES[entry.role]?.label || entry.role}</span>
-            <span className="wh-col-name wh-strong">{entry.action}</span>
-            <span className="wh-col-name wh-col-wrap wh-muted" title={entry.details}>{entry.details}</span>
-          </div>
-        ))}
+        {filtered.map((entry) => {
+          const canRestoreItem =
+            entry.restorable?.type === "item" &&
+            !items.some((i) => i.id === entry.restorable.data.id);
+          const restored = justRestored.has(entry.id);
+          return (
+            <div className="wh-row wh-row-audit" key={entry.id}>
+              <span className="wh-mono wh-muted">{fmtDateTime(entry.date)}</span>
+              <span>{ROLES[entry.role]?.emoji} {ROLES[entry.role]?.label || entry.role}</span>
+              <span className="wh-col-name wh-strong">{entry.action}</span>
+              <span className="wh-col-name wh-col-wrap wh-muted" title={entry.details}>{entry.details}</span>
+              <span>
+                {entry.restorable?.type === "item" && (
+                  restored || !canRestoreItem ? (
+                    <span className="wh-muted" style={{ fontSize: 11.5 }}>{restored ? "Восстановлено" : "Уже в каталоге"}</span>
+                  ) : (
+                    <button className="wh-btn-ghost" onClick={() => handleRestore(entry)}>Восстановить</button>
+                  )
+                )}
+              </span>
+            </div>
+          );
+        })}
         {filtered.length === 0 && <div className="wh-empty">{log.length === 0 ? "Изменений пока не было" : "Ничего не найдено"}</div>}
       </div>
     </div>
@@ -2611,6 +2880,35 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-price-history-row { display: grid; grid-template-columns: 80px 1fr auto; gap: 10px; align-items: center; font-size: 12.5px; }
 
 .wh-cost-calc { background: #FFF7E8; border: 1px dashed var(--orange-2); border-radius: 14px; padding: 12px 16px; margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+
+.wh-price-warning {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: #FDEDEA; border: 1px solid #F3C4B8; color: #A83A26;
+  border-radius: 14px; padding: 12px 16px; margin-top: 14px;
+  font-size: 12.5px; line-height: 1.5;
+}
+.wh-price-warning strong { font-family: 'Poppins', sans-serif; }
+
+/* ---- price trends ---- */
+.wh-price-trend-list { display: flex; flex-direction: column; gap: 10px; }
+.wh-price-trend-card { background: var(--white); border-radius: 16px; box-shadow: var(--shadow-sm); overflow: hidden; }
+.wh-price-trend-head {
+  display: grid; grid-template-columns: 1.6fr 160px 110px; align-items: center; gap: 14px;
+  width: 100%; border: none; background: transparent; cursor: pointer;
+  padding: 16px 18px; font-family: inherit; text-align: left;
+}
+.wh-price-trend-head:hover { background: #F9FAFD; }
+.wh-trend-badge {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  font-family: 'Poppins', sans-serif; font-weight: 700; font-size: 12.5px;
+  padding: 6px 12px; border-radius: 999px; justify-self: end;
+}
+.wh-trend-badge.up { background: #FDEDEA; color: var(--neg); }
+.wh-trend-badge.down { background: #E3F7EE; color: var(--pos); }
+.wh-trend-badge.big.up { background: var(--neg); color: #fff; }
+
+.wh-price-trend-history { padding: 4px 18px 16px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 14px; }
+.wh-price-trend-point { display: grid; grid-template-columns: 90px 1fr 90px 1.2fr; align-items: center; gap: 12px; font-size: 12.5px; }
 .wh-cost-calc-row { display: flex; justify-content: space-between; gap: 16px; font-size: 12.5px; color: #9A5B12; }
 .wh-cost-calc-row span:first-child { max-width: 70%; }
 
@@ -2662,6 +2960,28 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-qty-btn:hover { background: #EEF0FF; border-color: var(--indigo); }
 
 .wh-row-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+
+.wh-icon-btn-active { background: #EEF0FF; }
+.wh-link-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 15px; height: 15px; border-radius: 999px; margin-left: 2px;
+  background: var(--indigo); color: #fff; font-size: 9.5px; font-weight: 700; padding: 0 3px;
+}
+
+.wh-purchase-links { background: #F9FAFD; border-bottom: 1px solid var(--line); padding: 14px 16px 16px; }
+.wh-purchase-links-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.wh-purchase-link-row {
+  display: grid; grid-template-columns: 1.6fr 90px 1.4fr 90px 28px;
+  align-items: center; gap: 10px; padding: 7px 10px; font-size: 12.5px;
+  background: var(--white); border-radius: 10px;
+}
+.wh-purchase-link-row a { color: var(--indigo-dark); text-decoration: underline; }
+.wh-purchase-link-form { display: grid; grid-template-columns: 1.3fr 1.3fr 100px 1.1fr auto; gap: 8px; }
+.wh-purchase-link-form input {
+  font: inherit; font-size: 12.5px; border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 10px; background: var(--white);
+}
+.wh-purchase-link-form .wh-btn-primary { padding: 8px 16px; font-size: 12.5px; }
 .wh-badge-low { display: inline-flex; align-items: center; gap: 4px; color: var(--neg); font-size: 11px; font-weight: 700; background: #FDEDEA; padding: 3px 8px; border-radius: 999px; }
 .wh-icon-btn { background: none; border: none; color: var(--muted); cursor: pointer; padding: 5px; border-radius: 8px; display: inline-flex; }
 .wh-icon-btn:hover { background: #EEF0FF; color: var(--indigo-dark); }
@@ -2699,7 +3019,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-asset-transfer-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 
 .wh-row-transfer { grid-template-columns: 92px 1.3fr 1.3fr 1.3fr 70px 1.4fr; min-width: 680px; }
-.wh-row-audit { grid-template-columns: 140px 170px 1.2fr 1.8fr; min-width: 640px; }
+.wh-row-audit { grid-template-columns: 140px 170px 1.2fr 1.8fr 120px; min-width: 760px; }
 
 /* ---- issue log ---- */
 .wh-log-header { display: flex; justify-content: space-between; align-items: center; margin: 28px 0 14px; flex-wrap: wrap; gap: 10px; }
@@ -2787,10 +3107,16 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   .wh-form-grid { grid-template-columns: 1fr 1fr; }
   .wh-report-grid { grid-template-columns: 1fr; }
   .wh-stat-cards { grid-template-columns: 1fr 1fr; }
+  .wh-purchase-link-form { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 560px) {
-  .wh-wallet-row { grid-template-columns: 1fr; }
+  .wh-wallet-row { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .wh-wallet-card { padding: 14px 14px 16px; border-radius: 16px; }
+  .wh-wallet-icon { width: 28px; height: 28px; font-size: 14px; border-radius: 9px; margin-bottom: 10px; }
+  .wh-wallet-card .w-label { font-size: 11px; margin-bottom: 6px; }
+  .wh-wallet-card .w-value { font-size: 15px; margin-bottom: 2px; }
+  .wh-wallet-card .w-sub { font-size: 9.5px; }
   .wh-stat-cards { grid-template-columns: 1fr; }
   .wh-hero-nav { flex-direction: column; align-items: flex-start; }
   .wh-brand { padding-right: 0; }
