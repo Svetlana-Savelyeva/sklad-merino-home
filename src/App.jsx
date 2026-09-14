@@ -743,6 +743,31 @@ export default function WarehouseApp() {
     logChange("Восстановлена позиция каталога", `«${itemData.name}»`, { items: newItems });
   };
 
+  // Разовое восстановление 7 позиций категории "Средства для уборки",
+  // удалённых ещё до того, как в журнале изменений появилась возможность
+  // восстановления по кнопке (тем записям не за что "зацепиться" — снимок
+  // данных на момент удаления тогда не сохранялся). Добавляет только те
+  // позиции, которых сейчас нет в каталоге, по названию.
+  const LEGACY_DELETED_ITEMS = [
+    { code: "СУ-006", name: "Антижир / средство для кухни", category: "Средства для уборки", unit: "100 мл", minQuantity: 12 },
+    { code: "СУ-007", name: "Средство от известкового налёта", category: "Средства для уборки", unit: "100 мл", minQuantity: 12 },
+    { code: "СУ-008", name: "Дезинфицирующее средство", category: "Средства для уборки", unit: "100 мл", minQuantity: 10 },
+    { code: "СУ-009", name: "Меламиновые губки", category: "Средства для уборки", unit: "шт", minQuantity: 20 },
+    { code: "СУ-010", name: "Губки хозяйственные", category: "Средства для уборки", unit: "шт", minQuantity: 30 },
+    { code: "СУ-011", name: "Перчатки одноразовые", category: "Средства для уборки", unit: "пара", minQuantity: 12 },
+    { code: "СУ-012", name: "Тряпки / салфетки для уборки", category: "Средства для уборки", unit: "шт", minQuantity: 25 },
+  ];
+  const restoreLegacyDeletedItems = () => {
+    const missing = LEGACY_DELETED_ITEMS.filter(
+      (li) => !items.some((i) => i.name === li.name)
+    );
+    if (missing.length === 0) return;
+    const restored = missing.map((li) => ({ id: nextId("i"), ...li, quantity: 0, unitCost: 0 }));
+    const newItems = [...restored, ...items];
+    setItems(newItems);
+    logChange("Восстановлены позиции каталога (пакетно)", `${restored.map((r) => r.name).join(", ")}`, { items: newItems });
+  };
+
   // Справочник вариантов закупки по позиции — где смотрели, почём и по какой
   // ссылке, ещё до фактической покупки. Отдельно от "Истории поступлений",
   // где фиксируются уже совершённые закупки.
@@ -876,11 +901,6 @@ export default function WarehouseApp() {
         )}
 
         <div className="wh-hero-sheet">
-          <div className="wh-role-badge">
-            <span>{ROLES[role].emoji} {ROLES[role].label}</span>
-            <button className="wh-logout-btn" onClick={logOut}>Выйти</button>
-          </div>
-
           <div className="wh-hero-nav">
             <div className="wh-brand">
               <div className="wh-brand-badge"><img src={MERINO_LOGO} alt="Merino Home" /></div>
@@ -898,6 +918,11 @@ export default function WarehouseApp() {
                   </button>
                 ))}
               </nav>
+            </div>
+
+            <div className="wh-role-badge">
+              <span>{ROLES[role].emoji} {ROLES[role].label}</span>
+              <button className="wh-logout-btn" onClick={logOut}>Выйти</button>
             </div>
           </div>
         </div>
@@ -983,7 +1008,12 @@ export default function WarehouseApp() {
             <PriceTrendsView items={items} receipts={receipts} />
           )}
           {role === "admin" && tab === "audit" && (
-            <AuditLogView log={changeLog} items={items} onRestoreItem={restoreItem} />
+            <AuditLogView
+              log={changeLog}
+              items={items}
+              onRestoreItem={restoreItem}
+              onRestoreLegacy={restoreLegacyDeletedItems}
+            />
           )}
         </main>
       </div>
@@ -2562,9 +2592,10 @@ function PriceTrendsView({ items, receipts }) {
   );
 }
 
-function AuditLogView({ log, items, onRestoreItem }) {
+function AuditLogView({ log, items, onRestoreItem, onRestoreLegacy }) {
   const [filter, setFilter] = useState("");
   const [justRestored, setJustRestored] = useState(() => new Set());
+  const [legacyDone, setLegacyDone] = useState(false);
 
   const filtered = log.filter((entry) => {
     const q = filter.toLowerCase();
@@ -2580,6 +2611,11 @@ function AuditLogView({ log, items, onRestoreItem }) {
     setJustRestored((prev) => new Set(prev).add(entry.id));
   };
 
+  const handleRestoreLegacy = () => {
+    onRestoreLegacy();
+    setLegacyDone(true);
+  };
+
   return (
     <div>
       <div className="wh-header">
@@ -2590,6 +2626,16 @@ function AuditLogView({ log, items, onRestoreItem }) {
             ни в журнал выдач, ни в историю поступлений, ни в журнал перемещений
           </p>
         </div>
+      </div>
+
+      <div className="wh-legacy-restore">
+        <span>
+          🧹 7 позиций категории «Средства для уборки» были удалены ещё до появления кнопки «Восстановить»
+          в этом журнале — их снимок для точечного восстановления не сохранился. Можно вернуть их разом.
+        </span>
+        <button className="wh-btn-ghost" onClick={handleRestoreLegacy} disabled={legacyDone}>
+          {legacyDone ? "Возвращено" : "Вернуть 7 позиций"}
+        </button>
       </div>
 
       <div className="wh-search">
@@ -2688,6 +2734,15 @@ html, body, #root {
   font-size: 12.5px; font-weight: 600; line-height: 1.5;
 }
 
+.wh-legacy-restore {
+  display: flex; align-items: center; gap: 14px; justify-content: space-between; flex-wrap: wrap;
+  background: #F6F8FC; border: 1px solid var(--line);
+  border-radius: 14px; padding: 12px 16px; margin-bottom: 18px;
+  font-size: 12.5px; color: var(--text); line-height: 1.5;
+}
+.wh-legacy-restore span { max-width: 560px; }
+.wh-legacy-restore .wh-btn-ghost:disabled { opacity: .5; cursor: default; }
+
 /* ---- login gate ---- */
 .wh-login-root { display: flex; align-items: center; justify-content: center; padding: 40px 20px; }
 .wh-login-card {
@@ -2715,7 +2770,7 @@ html, body, #root {
 /* ---- hero sheet ---- */
 .wh-hero-sheet { position: relative; background: var(--white); border-radius: 26px; box-shadow: var(--shadow-lg); padding: 22px 24px 24px; margin-bottom: 18px; }
 .wh-hero-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 20px; }
-.wh-brand { display: flex; align-items: center; gap: 10px; padding-right: 120px; }
+.wh-brand { display: flex; align-items: center; gap: 10px; }
 .wh-brand-badge {
   width: 36px; height: 36px; border-radius: 11px;
   background: #EEF0FF; color: var(--indigo-dark);
@@ -2745,12 +2800,14 @@ html, body, #root {
 .wh-tab-pill button:hover { color: var(--indigo-dark); }
 .wh-tab-pill button.active { background: var(--indigo); color: #fff; box-shadow: var(--shadow-sm); }
 
-/* Бейдж роли — всегда в правом верхнем углу карточки, независимо от того,
-   как переносится остальная навигация на узких экранах. */
+/* Бейдж роли — обычный элемент строки навигации (не "плавающий" поверх),
+   поэтому браузер сам резервирует под него место при любой ширине экрана
+   и любом количестве вкладок — раньше абсолютное позиционирование иногда
+   давало наложение на вкладки при большом их числе на широких экранах. */
 .wh-role-badge {
-  position: absolute; top: 22px; right: 24px; z-index: 2;
   display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text); font-weight: 600;
   background: #F6F8FC; border-radius: 999px; padding: 7px 8px 7px 14px;
+  margin-left: auto; flex-shrink: 0;
 }
 .wh-logout-btn { border: none; background: #fff; color: var(--muted); font: inherit; font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px; cursor: pointer; box-shadow: var(--shadow-sm); }
 .wh-logout-btn:hover { color: var(--neg); }
@@ -3119,11 +3176,9 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   .wh-wallet-card .w-sub { font-size: 9.5px; }
   .wh-stat-cards { grid-template-columns: 1fr; }
   .wh-hero-nav { flex-direction: column; align-items: flex-start; }
-  .wh-brand { padding-right: 0; }
   .wh-tab-pill-wrap { width: 100%; flex: 1 1 100%; }
   .wh-role-badge {
-    position: static; top: auto; right: auto;
-    display: inline-flex; margin-bottom: 14px;
+    margin-left: 0; margin-top: 4px;
     padding: 5px 6px 5px 10px; gap: 6px;
   }
   .wh-role-badge span { font-size: 11px; }
