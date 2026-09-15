@@ -3183,5 +3183,9 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   }
   .wh-role-badge span { font-size: 11px; }
   .wh-logout-btn { padding: 5px 9px; font-size: 10.5px; }
+  .wh-form-grid { grid-template-columns: 1fr; }
+  .wh-purchase-link-form { grid-template-columns: 1fr; }
+  .wh-purchase-link-row { grid-template-columns: 1fr; row-gap: 4px; }
+  .wh-cost-calc-row { flex-direction: column; align-items: flex-start; gap: 2px; }
 }
 `;
