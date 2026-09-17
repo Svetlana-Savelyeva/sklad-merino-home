@@ -2750,7 +2750,7 @@ const CSS = `
   max-width: 100vw;
   box-sizing: border-box;
   padding: 24px 20px 40px;
-  overflow-x: hidden;
+  overflow-x: clip;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -2759,13 +2759,15 @@ const CSS = `
    внутри своего блока), Safari иногда расширяет масштаб всей страницы вместо
    того чтобы просто обрезать этот элемент — тогда при открытии всё выглядит
    "увеличенным", и приходится вручную разводить пальцы, чтобы вернуть
-   нормальный масштаб. Явный overflow-x: hidden на документе не даёт странице
-   в целом расползтись по ширине из-за одного такого элемента. */
+   нормальный масштаб. overflow-x: clip надёжнее, чем hidden, против именно
+   этого поведения (hidden в некоторых версиях Safari всё равно позволяет
+   внутреннему широкому элементу повлиять на начальный масштаб страницы). */
 html, body, #root {
   margin: 0;
   min-height: 100%;
+  width: 100%;
   max-width: 100vw;
-  overflow-x: hidden;
+  overflow-x: clip;
   background: #EEF2F8;
 }
 
@@ -2964,7 +2966,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-filter-chip.warn button { color: var(--neg); }
 
 /* ---- panel / form ---- */
-.wh-panel { background: var(--white); border-radius: 22px; box-shadow: var(--shadow-sm); padding: 22px 24px; margin-bottom: 22px; }
+.wh-panel { width: 100%; max-width: 100%; box-sizing: border-box; background: var(--white); border-radius: 22px; box-shadow: var(--shadow-sm); padding: 22px 24px; margin-bottom: 22px; }
 .wh-panel-static { margin-bottom: 30px; }
 .wh-panel-title { display: flex; justify-content: space-between; align-items: center; font-family: 'Poppins', sans-serif; font-weight: 600; font-size: 14.5px; margin-bottom: 16px; }
 .wh-panel-title-icon { display: inline-flex; align-items: center; gap: 8px; }
@@ -3013,7 +3015,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-cost-calc-row { display: flex; justify-content: space-between; gap: 16px; font-size: 12.5px; color: #9A5B12; }
 .wh-cost-calc-row span:first-child { max-width: 70%; }
 
-.wh-form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.wh-form-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
 .wh-span-2 { grid-column: span 2; }
 .wh-form-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .wh-form-grid input, .wh-form-grid select {
@@ -3037,7 +3039,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-cat-count { background: #EEF0FF; color: var(--indigo-dark); font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
 .wh-cat-value { margin-left: auto; font-family: 'Poppins', sans-serif; font-size: 13px; color: var(--muted); font-weight: 600; }
 
-.wh-table { background: var(--white); border-radius: 20px; box-shadow: var(--shadow-sm); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.wh-table { width: 100%; max-width: 100%; background: var(--white); border-radius: 20px; box-shadow: var(--shadow-sm); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
 .wh-row {
   display: grid; grid-template-columns: 2fr 132px 60px 90px 100px 130px;
   align-items: center; gap: 10px; padding: 12px 16px;
@@ -3077,7 +3079,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   background: var(--white); border-radius: 10px;
 }
 .wh-purchase-link-row a { color: var(--indigo-dark); text-decoration: underline; }
-.wh-purchase-link-form { display: grid; grid-template-columns: 1.3fr 1.3fr 100px 1.1fr auto; gap: 8px; }
+.wh-purchase-link-form { display: grid; grid-template-columns: 1fr; gap: 8px; }
 .wh-purchase-link-form input {
   font: inherit; font-size: 12.5px; border: 1px solid var(--line); border-radius: 10px;
   padding: 8px 10px; background: var(--white);
@@ -3205,10 +3207,8 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 
 @media (max-width: 900px) {
   .wh-wallet-row { grid-template-columns: repeat(2, 1fr); }
-  .wh-form-grid { grid-template-columns: 1fr 1fr; }
   .wh-report-grid { grid-template-columns: 1fr; }
   .wh-stat-cards { grid-template-columns: 1fr 1fr; }
-  .wh-purchase-link-form { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 560px) {
@@ -3227,8 +3227,6 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   }
   .wh-role-badge span { font-size: 11px; }
   .wh-logout-btn { padding: 5px 9px; font-size: 10.5px; }
-  .wh-form-grid { grid-template-columns: 1fr; gap: 10px; }
-  .wh-purchase-link-form { grid-template-columns: 1fr; }
   .wh-purchase-link-row { grid-template-columns: 1fr; row-gap: 4px; }
   .wh-cost-calc-row { flex-direction: column; align-items: flex-start; gap: 2px; }
   .wh-panel { padding: 16px 16px; }
