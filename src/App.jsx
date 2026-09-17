@@ -527,20 +527,53 @@ export default function WarehouseApp() {
   // Сохраняет ПОЛНОЕ состояние склада одним запросом. Принимает только те поля,
   // которые реально поменялись, остальные берёт из текущего состояния —
   // так каждое действие пользователя даёт ровно одну запись в хранилище.
+  //
+  // Важно: перед записью сначала подтягиваем САМОЕ СВЕЖЕЕ состояние из базы
+  // и берём поля, которые сейчас не меняются, именно из него, а не из
+  // локальной памяти этой вкладки. Раньше если сайт был открыт в двух
+  // вкладках/на двух устройствах одновременно, вкладка, которая простояла
+  // открытой дольше, могла своим сохранением затереть то, что успели
+  // добавить в другом месте — просто потому что "помнила" более старую
+  // версию данных. Так это исключается для всех полей, кроме тех, что
+  // реально меняет именно это действие.
   const saveState = (partial) => {
-    const payload = {
-      items: partial.items ?? items,
-      issues: partial.issues ?? issues,
-      receipts: partial.receipts ?? receipts,
-      objects: partial.objects ?? objects,
-      assets: partial.assets ?? assets,
-      assetTransfers: partial.assetTransfers ?? assetTransfers,
-      warehouses: partial.warehouses ?? warehouses,
-      changeLog: partial.changeLog ?? changeLog,
-      purchaseOptions: partial.purchaseOptions ?? purchaseOptions,
-      markupRate: partial.markupRate ?? markupRate,
-    };
-    persistPayload(payload)
+    (async () => {
+      let fresh = null;
+      try {
+        fresh = await loadState();
+      } catch {
+        fresh = null;
+      }
+      const base = fresh || { items, issues, receipts, objects, assets, assetTransfers, warehouses, changeLog, purchaseOptions, markupRate };
+      const payload = {
+        items: partial.items ?? base.items ?? items,
+        issues: partial.issues ?? base.issues ?? issues,
+        receipts: partial.receipts ?? base.receipts ?? receipts,
+        objects: partial.objects ?? base.objects ?? objects,
+        assets: partial.assets ?? base.assets ?? assets,
+        assetTransfers: partial.assetTransfers ?? base.assetTransfers ?? assetTransfers,
+        warehouses: partial.warehouses ?? base.warehouses ?? warehouses,
+        changeLog: partial.changeLog ?? base.changeLog ?? changeLog,
+        purchaseOptions: partial.purchaseOptions ?? base.purchaseOptions ?? purchaseOptions,
+        markupRate: partial.markupRate ?? base.markupRate ?? markupRate,
+      };
+      await persistPayload(payload);
+      // Если в базе оказались более свежие данные по полям, которые эта
+      // вкладка не меняла сейчас, — подтягиваем их и в её собственное
+      // состояние, чтобы интерфейс не расходился с тем, что реально сохранено.
+      if (fresh) {
+        if (partial.items === undefined) setItems(payload.items);
+        if (partial.issues === undefined) setIssues(payload.issues);
+        if (partial.receipts === undefined) setReceipts(payload.receipts);
+        if (partial.objects === undefined) setObjects(payload.objects);
+        if (partial.assets === undefined) setAssets(payload.assets);
+        if (partial.assetTransfers === undefined) setAssetTransfers(payload.assetTransfers);
+        if (partial.warehouses === undefined) setWarehouses(payload.warehouses);
+        if (partial.changeLog === undefined) setChangeLog(payload.changeLog);
+        if (partial.purchaseOptions === undefined) setPurchaseOptions(payload.purchaseOptions);
+        if (partial.markupRate === undefined) setMarkupRate(payload.markupRate);
+      }
+    })()
       .then(() => setSaveError(false))
       .catch((e) => {
         console.error("Ошибка сохранения:", e);
@@ -3183,9 +3216,21 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   }
   .wh-role-badge span { font-size: 11px; }
   .wh-logout-btn { padding: 5px 9px; font-size: 10.5px; }
-  .wh-form-grid { grid-template-columns: 1fr; }
+  .wh-form-grid { grid-template-columns: 1fr; gap: 10px; }
   .wh-purchase-link-form { grid-template-columns: 1fr; }
   .wh-purchase-link-row { grid-template-columns: 1fr; row-gap: 4px; }
   .wh-cost-calc-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .wh-panel { padding: 16px 16px; }
+  .wh-hint-banner { font-size: 11.5px; padding: 10px 12px; margin-bottom: 12px; }
+  .wh-cost-calc { padding: 10px 12px; }
+  .wh-price-history { padding: 10px 12px; }
+  .wh-price-history-row { grid-template-columns: 1fr; row-gap: 2px; }
+  .wh-form-grid label { gap: 3px; }
+  .wh-form-grid input, .wh-form-grid select { padding: 8px 10px; }
+  .wh-panel-actions {
+    position: sticky; bottom: 0; margin: 16px -16px -16px;
+    padding: 12px 16px; background: var(--white);
+    border-top: 1px solid var(--line); border-radius: 0 0 22px 22px;
+  }
 }
 `;
