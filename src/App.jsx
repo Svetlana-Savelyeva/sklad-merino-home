@@ -963,7 +963,7 @@ export default function WarehouseApp() {
         )}
 
         <div className="wh-hero-sheet">
-          <div className="wh-hero-nav">
+          <div className="wh-hero-top-row">
             <div className="wh-brand">
               <div className="wh-brand-badge"><img src={MERINO_LOGO} alt="Merino Home" /></div>
               <div>
@@ -972,6 +972,13 @@ export default function WarehouseApp() {
               </div>
             </div>
 
+            <div className="wh-role-badge">
+              <span>{ROLES[role].emoji} {userName ? `${userName} · ${ROLES[role].label}` : ROLES[role].label}</span>
+              <button className="wh-logout-btn" onClick={logOut}>Выйти</button>
+            </div>
+          </div>
+
+          <div className="wh-hero-nav">
             <div className="wh-tab-pill-wrap">
               <nav className="wh-tab-pill">
                 {allowedTabs.map((t) => (
@@ -980,11 +987,6 @@ export default function WarehouseApp() {
                   </button>
                 ))}
               </nav>
-            </div>
-
-            <div className="wh-role-badge">
-              <span>{ROLES[role].emoji} {userName ? `${userName} · ${ROLES[role].label}` : ROLES[role].label}</span>
-              <button className="wh-logout-btn" onClick={logOut}>Выйти</button>
             </div>
           </div>
         </div>
@@ -2908,7 +2910,12 @@ html, body, #root {
 
 /* ---- hero sheet ---- */
 .wh-hero-sheet { position: relative; background: var(--white); border-radius: 26px; box-shadow: var(--shadow-lg); padding: 22px 24px 24px; margin-bottom: 18px; }
-.wh-hero-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 20px; }
+
+/* Верхний ряд: бренд слева, кто вошёл — справа. Всегда вместе, независимо
+   от того, сколько вкладок в разделе ниже и как они переносятся. */
+.wh-hero-top-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 16px; }
+
+.wh-hero-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
 .wh-brand { display: flex; align-items: center; gap: 10px; }
 .wh-brand-badge {
   width: 36px; height: 36px; border-radius: 11px;
@@ -2939,14 +2946,11 @@ html, body, #root {
 .wh-tab-pill button:hover { color: var(--indigo-dark); }
 .wh-tab-pill button.active { background: var(--indigo); color: #fff; box-shadow: var(--shadow-sm); }
 
-/* Бейдж роли — обычный элемент строки навигации (не "плавающий" поверх),
-   поэтому браузер сам резервирует под него место при любой ширине экрана
-   и любом количестве вкладок — раньше абсолютное позиционирование иногда
-   давало наложение на вкладки при большом их числе на широких экранах. */
+/* Бейдж роли — обычный элемент верхнего ряда (не "плавающий" поверх). */
 .wh-role-badge {
   display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text); font-weight: 600;
   background: #F6F8FC; border-radius: 999px; padding: 7px 8px 7px 14px;
-  margin-left: auto; flex-shrink: 0;
+  flex-shrink: 0;
 }
 .wh-logout-btn { border: none; background: #fff; color: var(--muted); font: inherit; font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px; cursor: pointer; box-shadow: var(--shadow-sm); }
 .wh-logout-btn:hover { color: var(--neg); }
@@ -3314,10 +3318,9 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   .wh-wallet-card .w-value { font-size: 15px; margin-bottom: 2px; }
   .wh-wallet-card .w-sub { font-size: 9.5px; }
   .wh-stat-cards { grid-template-columns: 1fr; }
-  .wh-hero-nav { flex-direction: column; align-items: flex-start; }
+  .wh-hero-top-row { gap: 10px; }
   .wh-tab-pill-wrap { width: 100%; flex: 1 1 100%; }
   .wh-role-badge {
-    margin-left: 0; margin-top: 4px;
     padding: 5px 6px 5px 10px; gap: 6px;
   }
   .wh-role-badge span { font-size: 11px; }
