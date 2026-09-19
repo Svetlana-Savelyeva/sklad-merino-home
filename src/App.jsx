@@ -505,6 +505,25 @@ export default function WarehouseApp() {
   const [dataLoaded, setDataLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
 
+  // Стили вставляем не через <style>{CSS}</style> в разметке, а императивно
+  // в document.head — и первым делом удаляем ЛЮБЫЕ старые версии этого тега
+  // (по id), какие бы ни остались от предыдущей загрузки в этом же превью.
+  // Так исключается ситуация, когда старый набор правил (например, старая
+  // раскладка формы) продолжает действовать поверх нового просто потому что
+  // его тег оказался в документе позже нового по случайному порядку.
+  useEffect(() => {
+    try {
+      document.querySelectorAll("style[data-wh-app-style]").forEach((el) => el.remove());
+      const styleEl = document.createElement("style");
+      styleEl.setAttribute("data-wh-app-style", "true");
+      styleEl.textContent = CSS;
+      document.head.appendChild(styleEl);
+    } catch {
+      // нет доступа к document — просто пропускаем, JSX-вариант ниже
+      // на такой случай пока оставлен как запасной
+    }
+  }, []);
+
   // Иконка приложения — favicon вкладки браузера и заголовок страницы.
   // Выполняется один раз при монтировании; безопасно (просто ничего не
   // сделает), если компонент рендерится вне обычного document (например,
@@ -667,7 +686,6 @@ export default function WarehouseApp() {
   if (!dataLoaded) {
     return (
       <div className="wh-root wh-login-root">
-        <style>{CSS}</style>
         <div className="wh-login-card">
           <div className="wh-login-logo"><img src={MERINO_LOGO} alt="Merino Home" /></div>
           <div className="wh-login-title">Склад Merino Home</div>
@@ -922,7 +940,6 @@ export default function WarehouseApp() {
 
   return (
     <div className="wh-root">
-      <style>{CSS}</style>
       <div className="wh-page">
 
         {saveError && (
@@ -1072,7 +1089,6 @@ function LoginGate({ onLogIn }) {
 
   return (
     <div className="wh-root wh-login-root">
-      <style>{CSS}</style>
       <div className="wh-login-card">
         <div className="wh-login-logo"><img src={MERINO_LOGO} alt="Merino Home" /></div>
         <div className="wh-login-title">Склад Merino Home</div>
@@ -1289,7 +1305,13 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
                           )}
                           <button
                             className={`wh-icon-btn ${itemOptions.length > 0 ? "wh-icon-btn-active" : ""}`}
-                            onClick={() => setLinksForId(linksOpen ? null : item.id)}
+                            onClick={() => {
+                              setLinksForId(linksOpen ? null : item.id);
+                              setNewLinkSource("");
+                              setNewLinkUrl("");
+                              setNewLinkPrice("");
+                              setNewLinkNote("");
+                            }}
                             title="Варианты закупки (ссылки и цены)"
                           >
                             🔗{itemOptions.length > 0 && <span className="wh-link-count">{itemOptions.length}</span>}
@@ -1390,6 +1412,13 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
 }
 
 const UNIT_OPTIONS = ["шт", "пара", "уп", "л", "кг"];
+
+// Гарантированная раскладка "поле под полем" для форм — задаётся инлайн-стилем,
+// а не CSS-классом, потому что в некоторых окружениях предпросмотра внешние
+// правила для grid-template-columns на этой конкретной обёртке почему-то не
+// применялись, хотя всё остальное на странице стилизовалось нормально.
+// Инлайн-стиль имеет наивысший приоритет и не зависит от внешнего файла стилей.
+const FORCE_STACK_STYLE = { display: "flex", flexDirection: "column", gap: 14 };
 
 function ReceiveForm({ items, receipts = [], purchaseOptions = [], initialMode = "existing", onReceiveStock, onReceiveNewItem, onClose }) {
   const [mode, setMode] = useState(initialMode); // "existing" | "new"
@@ -1503,7 +1532,7 @@ function ReceiveForm({ items, receipts = [], purchaseOptions = [], initialMode =
         «Мин. запас» тоже указывается в единицах отгрузки, а не в упаковках.
       </div>
 
-      <div className="wh-form-grid">
+      <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
         {mode === "existing" ? (
           <label className="wh-span-2">
             Материал
@@ -1650,7 +1679,7 @@ function EditItemForm({ item, onSave, onClose }) {
         их можно изменить только через выдачу или приёмку партии.
       </div>
 
-      <div className="wh-form-grid">
+      <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
         <label className="wh-span-2">
           Наименование
           <input value={name} onChange={(e) => setName(e.target.value)} />
@@ -1755,7 +1784,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
             Объекты синхронизированы с картой объектов. Когда объект выбывает — не удаляйте его, а выключайте
             переключателем: так все прошлые выдачи и отчёты по нему сохранят номер и название.
           </div>
-          <div className="wh-form-grid" style={{ marginBottom: 16 }}>
+          <div className="wh-form-grid" style={{ ...FORCE_STACK_STYLE, marginBottom: 16 }}>
             <label>
               Номер объекта
               <input value={newNumber} onChange={(e) => setNewNumber(e.target.value)} placeholder="Например, 88" />
@@ -1783,7 +1812,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
       )}
 
       <div className="wh-panel wh-panel-static">
-        <div className="wh-form-grid">
+        <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
           <label className="wh-span-2">
             Материал
             <select value={itemId} onChange={(e) => setItemId(e.target.value)}>
@@ -2008,7 +2037,7 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
               </div>
             ))}
           </div>
-          <div className="wh-form-grid">
+          <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
             <label className="wh-span-2">
               Название нового склада
               <input value={newWarehouseName} onChange={(e) => setNewWarehouseName(e.target.value)} placeholder="Например, Склад 3" />
@@ -2026,7 +2055,7 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
             Новый тип инвентаря
             <button className="wh-icon-btn" onClick={() => setShowAddForm(false)}><X size={15} /></button>
           </div>
-          <div className="wh-form-grid">
+          <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
             <label className="wh-span-2">
               Наименование
               <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Например, Раскладушка" />
@@ -2121,7 +2150,7 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
 
               {isActing && (
                 <div className="wh-asset-transfer-form">
-                  <div className="wh-form-grid">
+                  <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
                     <label>
                       Откуда{isWriteOff ? " (что списываем)" : ""}
                       <select value={fromKey} onChange={(e) => setFromKey(e.target.value)}>
