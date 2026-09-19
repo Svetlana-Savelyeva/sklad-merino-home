@@ -501,6 +501,7 @@ export default function WarehouseApp() {
   const [changeLog, setChangeLog] = useState([]);
   const [purchaseOptions, setPurchaseOptions] = useState(seedPurchaseOptions);
   const [role, setRole] = useState(null); // null = не авторизован, показываем экран входа
+  const [userName, setUserName] = useState("");
   const [tab, setTab] = useState("catalog");
   // Фильтр каталога — включается кликом по wallet-карточкам ("Товарных
   // позиций" → catalogFilter = "inStock", "Нужно пополнить" → "lowStock"),
@@ -615,7 +616,7 @@ export default function WarehouseApp() {
   // снимок удалённых данных ({ type, data }), чтобы запись можно было вернуть
   // прямо из журнала.
   const logChange = (action, details, extra = {}, restorable = null) => {
-    const entry = { id: nextId("log"), date: nowStamp(), role, action, details, restorable };
+    const entry = { id: nextId("log"), date: nowStamp(), role, by: userName, action, details, restorable };
     const newLog = [entry, ...changeLog];
     setChangeLog(newLog);
     saveState({ changeLog: newLog, ...extra });
@@ -669,12 +670,13 @@ export default function WarehouseApp() {
 
   const allowedTabs = role ? ROLES[role].tabs : [];
 
-  const logIn = (nextRole) => {
+  const logIn = (nextRole, name) => {
     setRole(nextRole);
+    setUserName(name);
     setTab(ROLES[nextRole].defaultTab);
   };
 
-  const logOut = () => setRole(null);
+  const logOut = () => { setRole(null); setUserName(""); };
 
   // Переход по вкладке с проверкой прав — так клики по wallet-карточкам
   // не пытаются открыть раздел, недоступный текущей роли.
@@ -722,6 +724,7 @@ export default function WarehouseApp() {
       date: todayISO(),
       note: note.trim(),
       cost: q * item.unitCost,
+      by: userName,
     };
     const newIssues = [newIssue, ...issues];
     setItems(newItems);
@@ -739,7 +742,7 @@ export default function WarehouseApp() {
       const newCost = newQty > 0 ? (i.quantity * i.unitCost + totalCost) / newQty : i.unitCost;
       return { ...i, quantity: newQty, unitCost: newCost };
     });
-    const newReceipt = { id: nextId("r"), itemId, qty, unitCost: totalCost / qty, totalCost, date: todayISO(), supplier: supplier.trim() };
+    const newReceipt = { id: nextId("r"), itemId, qty, unitCost: totalCost / qty, totalCost, date: todayISO(), supplier: supplier.trim(), by: userName };
     const newReceipts = [newReceipt, ...receipts];
     setItems(newItems);
     setReceipts(newReceipts);
@@ -753,7 +756,7 @@ export default function WarehouseApp() {
     const id = nextId("i");
     const newItem = { id, ...data, quantity: qty, unitCost: qty > 0 ? totalCost / qty : 0 };
     const newItems = [newItem, ...items];
-    const newReceipt = { id: nextId("r"), itemId: id, qty, unitCost: totalCost / qty, totalCost, date: todayISO(), supplier: supplier.trim() };
+    const newReceipt = { id: nextId("r"), itemId: id, qty, unitCost: totalCost / qty, totalCost, date: todayISO(), supplier: supplier.trim(), by: userName };
     const newReceipts = [newReceipt, ...receipts];
     setItems(newItems);
     setReceipts(newReceipts);
@@ -938,6 +941,7 @@ export default function WarehouseApp() {
       quantity,
       date: todayISO(),
       note: note.trim(),
+      by: userName,
     };
     const newTransfers = [newTransfer, ...assetTransfers];
     setAssetTransfers(newTransfers);
@@ -979,7 +983,7 @@ export default function WarehouseApp() {
             </div>
 
             <div className="wh-role-badge">
-              <span>{ROLES[role].emoji} {ROLES[role].label}</span>
+              <span>{ROLES[role].emoji} {userName ? `${userName} · ${ROLES[role].label}` : ROLES[role].label}</span>
               <button className="wh-logout-btn" onClick={logOut}>Выйти</button>
             </div>
           </div>
@@ -1084,12 +1088,28 @@ export default function WarehouseApp() {
 function LoginGate({ onLogIn }) {
   const [roleChoice, setRoleChoice] = useState("admin");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState(() => {
+    try {
+      return localStorage.getItem("wh_user_name") || "";
+    } catch {
+      return "";
+    }
+  });
   const [error, setError] = useState("");
 
   const submit = () => {
+    if (!name.trim()) {
+      setError("Укажите, пожалуйста, ваше имя — это нужно, чтобы в журналах было видно, кто что делал.");
+      return;
+    }
     if (password.trim() === ROLES[roleChoice].password) {
       setError("");
-      onLogIn(roleChoice);
+      try {
+        localStorage.setItem("wh_user_name", name.trim());
+      } catch {
+        // localStorage недоступен — просто не запоминаем на будущее
+      }
+      onLogIn(roleChoice, name.trim());
     } else {
       setError("Неверный пароль. Проверьте раскладку клавиатуры и повторите попытку.");
     }
@@ -1101,6 +1121,16 @@ function LoginGate({ onLogIn }) {
         <div className="wh-login-logo"><img src={MERINO_LOGO} alt="Merino Home" /></div>
         <div className="wh-login-title">Склад Merino Home</div>
         <div className="wh-login-sub">Войдите, чтобы продолжить</div>
+
+        <label className="wh-login-field">
+          Ваше имя
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => { setName(e.target.value); setError(""); }}
+            placeholder="Например, Светлана"
+          />
+        </label>
 
         <label className="wh-login-field">
           Роль
@@ -1119,7 +1149,6 @@ function LoginGate({ onLogIn }) {
             onChange={(e) => { setPassword(e.target.value); setError(""); }}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
             placeholder="Введите пароль"
-            autoFocus
           />
         </label>
 
@@ -1268,13 +1297,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
         />
       )}
 
-      {editingId && (
-        <EditItemForm
-          item={items.find((i) => i.id === editingId)}
-          onSave={(updates) => { onEdit(editingId, updates); setEditingId(null); }}
-          onClose={() => setEditingId(null)}
-        />
-      )}
+
 
       {byCategory.map(({ cat, list }) => {
         const isCollapsed = collapsed[cat];
@@ -1338,7 +1361,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
                           >
                             🔗{itemOptions.length > 0 && <span className="wh-link-count">{itemOptions.length}</span>}
                           </button>
-                          <button className="wh-icon-btn" onClick={() => setEditingId(item.id)} title="Редактировать позицию">
+                          <button className="wh-icon-btn" onClick={() => setEditingId(editingId === item.id ? null : item.id)} title="Редактировать позицию">
                             <Pencil size={14} />
                           </button>
                           <button className="wh-icon-btn" onClick={() => onRemove(item.id)} title="Удалить позицию">
@@ -1346,6 +1369,14 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
                           </button>
                         </span>
                       </div>
+
+                      {editingId === item.id && (
+                        <EditItemForm
+                          item={item}
+                          onSave={(updates) => { onEdit(item.id, updates); setEditingId(null); }}
+                          onClose={() => setEditingId(null)}
+                        />
+                      )}
 
                       {linksOpen && (
                         <div className="wh-purchase-links">
@@ -1421,7 +1452,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
               const item = items.find((i) => i.id === r.itemId);
               return (
                 <div className="wh-row wh-row-receipt" key={r.id}>
-                  <span className="wh-mono wh-muted">{fmtDate(r.date)}</span>
+                  <span className="wh-mono wh-muted">{fmtDate(r.date)}{r.by && <span className="wh-by-name">{r.by}</span>}</span>
                   <span className="wh-col-name">{item?.name || "—"}</span>
                   <span className="wh-mono">{item ? fmtQty(r.qty, item.unit) : num(r.qty)}</span>
                   <span className="wh-mono wh-strong">{rub(r.unitCost)}</span>
@@ -1921,7 +1952,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
         </div>
         {filteredLog.map((s) => (
           <div className="wh-row wh-row-log" key={s.id}>
-            <span className="wh-mono wh-muted">{fmtDate(s.date)}</span>
+            <span className="wh-mono wh-muted">{fmtDate(s.date)}{s.by && <span className="wh-by-name">{s.by}</span>}</span>
             <span className="wh-apt-badge" title={s.roomName}><BedDouble size={12} /> {s.roomNumber} · {s.roomName}</span>
             <span className="wh-col-name">{s.itemName}</span>
             <span className="wh-mono">{num(s.qty)}</span>
@@ -2241,7 +2272,7 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
         </div>
         {historyWithNames.map((t) => (
           <div className="wh-row wh-row-transfer" key={t.id}>
-            <span className="wh-mono wh-muted">{fmtDate(t.date)}</span>
+            <span className="wh-mono wh-muted">{fmtDate(t.date)}{t.by && <span className="wh-by-name">{t.by}</span>}</span>
             <span className="wh-col-name">{t.assetName}</span>
             <span className="wh-col-name">{t.fromLabel}</span>
             <span className="wh-col-name">{t.toLabel}</span>
@@ -2691,6 +2722,7 @@ function AuditLogView({ log, items, onRestoreItem, onRestoreLegacy }) {
     return (
       entry.action.toLowerCase().includes(q) ||
       entry.details.toLowerCase().includes(q) ||
+      (entry.by || "").toLowerCase().includes(q) ||
       (ROLES[entry.role]?.label || "").toLowerCase().includes(q)
     );
   });
@@ -2735,7 +2767,7 @@ function AuditLogView({ log, items, onRestoreItem, onRestoreLegacy }) {
       <div className="wh-table">
         <div className="wh-row wh-row-head wh-row-audit">
           <span>Когда</span>
-          <span>Роль</span>
+          <span>Кто</span>
           <span className="wh-col-name">Действие</span>
           <span className="wh-col-name">Детали</span>
           <span></span>
@@ -2748,7 +2780,12 @@ function AuditLogView({ log, items, onRestoreItem, onRestoreLegacy }) {
           return (
             <div className="wh-row wh-row-audit" key={entry.id}>
               <span className="wh-mono wh-muted">{fmtDateTime(entry.date)}</span>
-              <span>{ROLES[entry.role]?.emoji} {ROLES[entry.role]?.label || entry.role}</span>
+              <span>
+                {entry.by && <strong className="wh-audit-name">{entry.by}</strong>}
+                <span className="wh-muted" style={{ fontSize: entry.by ? 11 : undefined }}>
+                  {ROLES[entry.role]?.emoji} {ROLES[entry.role]?.label || entry.role}
+                </span>
+              </span>
               <span className="wh-col-name wh-strong">{entry.action}</span>
               <span className="wh-col-name wh-col-wrap wh-muted" title={entry.details}>{entry.details}</span>
               <span>
@@ -3047,6 +3084,8 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   font-size: 12.5px; line-height: 1.5;
 }
 .wh-price-warning strong { font-family: 'Poppins', sans-serif; }
+.wh-audit-name { display: block; font-family: 'Poppins', sans-serif; font-size: 12.5px; margin-bottom: 1px; }
+.wh-by-name { display: block; font-size: 10px; color: var(--muted-2); font-weight: 500; }
 
 /* ---- price trends ---- */
 .wh-price-trend-list { display: flex; flex-direction: column; gap: 10px; }
