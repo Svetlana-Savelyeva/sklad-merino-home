@@ -191,8 +191,16 @@ const fmtDateTime = (iso) => {
   return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 };
 
-let idCounter = 100;
-const nextId = (prefix) => `${prefix}${idCounter++}`;
+// Раньше номера строились простым счётчиком, который каждый раз стартовал
+// заново со значения 100 при каждой перезагрузке страницы/новом деплое.
+// Из-за этого позиции, добавленные в РАЗНЫХ сеансах, но одна за другой по
+// счёту, могли получить ОДИНАКОВЫЙ номер — и приложение путало их местами
+// (например, при клике на "варианты закупки" открывались сразу обе). Теперь
+// номер строится из текущего времени и случайной части — так совпадение
+// практически исключено, даже между разными сеансами и устройствами.
+let idCounter = 0;
+const nextId = (prefix) =>
+  `${prefix}${Date.now().toString(36)}${(idCounter++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 const MONTH_NAMES = [
   "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
@@ -1137,6 +1145,16 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
   const [newLinkPrice, setNewLinkPrice] = useState("");
   const [newLinkNote, setNewLinkNote] = useState("");
 
+  // Уже встречавшиеся поставщики — и из реальных закупок, и из ранее
+  // добавленных вариантов закупки — для автоподсказки, чтобы не вводить
+  // одно и то же название по-разному.
+  const knownSourceSuggestions = [
+    ...new Set([
+      ...receipts.map((r) => r.supplier).filter(Boolean),
+      ...purchaseOptions.map((o) => o.source).filter(Boolean),
+    ]),
+  ];
+
   const submitPurchaseOption = (itemId) => {
     if (!newLinkSource.trim()) return;
     onAddPurchaseOption(itemId, {
@@ -1209,6 +1227,10 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
+
+      <datalist id="wh-purchase-source-suggestions">
+        {knownSourceSuggestions.map((s) => <option key={s} value={s} />)}
+      </datalist>
 
       {stockFilter === "inStock" && (
         <div className="wh-filter-chip">
@@ -1347,7 +1369,12 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
                             </div>
                           )}
                           <div className="wh-purchase-link-form">
-                            <input placeholder="Магазин / поставщик" value={newLinkSource} onChange={(e) => setNewLinkSource(e.target.value)} />
+                            <input
+                              placeholder="Магазин / поставщик"
+                              value={newLinkSource}
+                              onChange={(e) => setNewLinkSource(e.target.value)}
+                              list="wh-purchase-source-suggestions"
+                            />
                             <input placeholder="Ссылка (необязательно)" value={newLinkUrl} onChange={(e) => setNewLinkUrl(e.target.value)} />
                             <input type="number" min="0" placeholder="Цена, ₽" value={newLinkPrice} onChange={(e) => setNewLinkPrice(e.target.value)} />
                             <input placeholder="Комментарий" value={newLinkNote} onChange={(e) => setNewLinkNote(e.target.value)} />
