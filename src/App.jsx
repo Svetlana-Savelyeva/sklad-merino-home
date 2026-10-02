@@ -1822,6 +1822,17 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
     return groups;
   }, [items, materialQuery]);
 
+  // Закрывает список материала и на всякий случай явно убирает фокус с любого
+  // поля ввода — на телефоне иначе клавиатура иногда остаётся открытой даже
+  // после того, как сам список уже скрылся, перекрывая часть экрана.
+  const closeMaterialMenu = () => {
+    setMaterialOpen(false);
+    setMaterialQuery("");
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  };
+
   const activeObjects = [...objects].filter((o) => o.active).sort((a, b) => a.number.localeCompare(b.number, "ru", { numeric: true }));
   const allObjectsSorted = [...objects].sort((a, b) => a.number.localeCompare(b.number, "ru", { numeric: true }));
 
@@ -1925,13 +1936,12 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
               </button>
               {materialOpen && (
                 <>
-                  <div className="wh-pill-backdrop" onClick={() => { setMaterialOpen(false); setMaterialQuery(""); }} />
+                  <div className="wh-pill-backdrop" onClick={closeMaterialMenu} />
                   <div className="wh-material-menu">
                     <div className="wh-material-menu-header">
                       <div className="wh-material-search">
                         <Search size={14} />
                         <input
-                          autoFocus
                           placeholder="Начните вводить название…"
                           value={materialQuery}
                           onChange={(e) => setMaterialQuery(e.target.value)}
@@ -1940,7 +1950,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
                       <button
                         type="button"
                         className="wh-material-close"
-                        onClick={() => { setMaterialOpen(false); setMaterialQuery(""); }}
+                        onClick={closeMaterialMenu}
                       >
                         <X size={16} /> Закрыть
                       </button>
@@ -1956,7 +1966,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
                               key={i.id}
                               disabled={i.quantity === 0}
                               className={`wh-material-option ${i.id === itemId ? "selected" : ""}`}
-                              onClick={() => { setItemId(i.id); setMaterialOpen(false); setMaterialQuery(""); }}
+                              onClick={() => { setItemId(i.id); closeMaterialMenu(); }}
                             >
                               <span className="wh-col-name">{i.name}</span>
                               <span className="wh-mono wh-muted">
