@@ -3432,16 +3432,23 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin-bottom: 0;
 }
 .wh-material-search input { border: none; outline: none; font: inherit; font-size: 13.5px; width: 100%; background: transparent; color: var(--text); }
-.wh-material-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.wh-material-list { overflow-y: auto; overflow-x: hidden; flex: 1 1 auto; min-height: 0; max-width: 100%; }
 .wh-material-group-label {
   font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .02em;
   padding: 8px 8px 4px;
 }
 .wh-material-option {
-  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; max-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
   border: none; background: transparent; text-align: left; font: inherit; font-size: 13px;
   padding: 8px 8px; border-radius: 9px; cursor: pointer; color: var(--text);
 }
+/* Длинное название товара не должно расталкивать строку (а с ней и всю
+   страницу) по ширине — у flex-элемента по умолчанию min-width:auto, из-за
+   чего он не сжимался, и страница на телефоне "расползалась" и переставала
+   нормально масштабироваться. min-width:0 разрешает ему сжиматься и уйти
+   в многоточие вместо этого. */
+.wh-material-option .wh-col-name { min-width: 0; flex: 1 1 auto; }
+.wh-material-option .wh-mono { flex-shrink: 0; }
 .wh-material-option:hover { background: #F0F2FA; }
 .wh-material-option.selected { background: var(--indigo); color: #fff; }
 .wh-material-option.selected .wh-mono { color: rgba(255,255,255,0.8); }
