@@ -239,6 +239,7 @@ const exportAllData = (items, issues, receipts, objects, purchaseOptions = []) =
     "Количество": s.qty,
     "Себестоимость, ₽": s.cost,
     "Комментарий": s.note || "",
+    "Статус": s.cancelled ? "Отменено" : "Действует",
   }));
 
   const receiptRows = receipts.map((r) => ({
@@ -732,6 +733,24 @@ export default function WarehouseApp() {
     saveState({ items: newItems, issues: newIssues });
   };
 
+  // Отмена ошибочной выдачи: количество возвращается на остаток позиции,
+  // а сама запись в журнале не удаляется — просто помечается отменённой
+  // (зачёркивается в списке), чтобы не терять след того, что произошло.
+  // Отменённые выдачи не учитываются в себестоимости и в отчётах.
+  const cancelIssue = (issueId) => {
+    const issue = issues.find((s) => s.id === issueId);
+    if (!issue || issue.cancelled) return;
+    const newItems = items.map((i) =>
+      i.id === issue.itemId ? { ...i, quantity: i.quantity + issue.qty } : i
+    );
+    const newIssues = issues.map((s) =>
+      s.id === issueId ? { ...s, cancelled: true, cancelledBy: userName, cancelledDate: nowStamp() } : s
+    );
+    setItems(newItems);
+    setIssues(newIssues);
+    saveState({ items: newItems, issues: newIssues });
+  };
+
   // Оприходовать партию для уже существующей позиции: количество и себестоимость
   // пересчитываются как средневзвешенные между остатком и новой закупкой.
   const receiveStock = (itemId, qty, totalCost, supplier) => {
@@ -948,7 +967,7 @@ export default function WarehouseApp() {
     saveState({ assetTransfers: newTransfers });
   };
 
-  const totalIssuesCost = issues.reduce((s, x) => s + x.cost, 0);
+  const totalIssuesCost = issues.filter((x) => !x.cancelled).reduce((s, x) => s + x.cost, 0);
 
   return (
     <div className="wh-root">
@@ -1049,6 +1068,7 @@ export default function WarehouseApp() {
               onAddObject={addObject}
               onToggleObjectActive={toggleObjectActive}
               onClearIssues={clearIssues}
+              onCancelIssue={cancelIssue}
             />
           )}
           {(role === "admin" || role === "warehouse") && tab === "assets" && (
@@ -1319,7 +1339,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
             {!isCollapsed && (
               <div className="wh-table">
                 <div className="wh-row wh-row-head">
-                  <span className="wh-col-name">Наименование</span>
+                  <span className="wh-col-name wh-sticky-col">Наименование</span>
                   <span>Остаток</span>
                   <span>Мин.</span>
                   <span>Цена</span>
@@ -1333,7 +1353,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
                   return (
                     <React.Fragment key={item.id}>
                       <div className={`wh-row ${low ? "wh-row-low" : ""}`}>
-                        <span className="wh-col-name">{item.name}</span>
+                        <span className={`wh-col-name wh-sticky-col ${low ? "wh-sticky-col-low" : ""}`}>{item.name}</span>
                         <span className="wh-qty-cell">
                           <button className="wh-qty-btn" onClick={() => onAdjust(item.id, -1)}>−</button>
                           <span className="wh-mono">
@@ -1774,7 +1794,7 @@ function EditItemForm({ item, onSave, onClose }) {
 
 // ---------- Issue ----------
 
-function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggleObjectActive, onClearIssues }) {
+function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggleObjectActive, onClearIssues, onCancelIssue }) {
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [objectId, setObjectId] = useState("");
   const [qty, setQty] = useState("1");
@@ -1784,6 +1804,23 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
   const [newNumber, setNewNumber] = useState("");
   const [newName, setNewName] = useState("");
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [confirmingCancelId, setConfirmingCancelId] = useState(null);
+  const [materialQuery, setMaterialQuery] = useState("");
+  const [materialOpen, setMaterialOpen] = useState(false);
+
+  // Материалы для выпадающего списка — сгруппированные по категориям (как в
+  // каталоге) и отфильтрованные по тому, что набрали в поиске. Так среди
+  // десятков позиций можно быстро найти нужную, а не листать плоский список.
+  const materialGroups = useMemo(() => {
+    const q = materialQuery.trim().toLowerCase();
+    const filtered = q ? items.filter((i) => i.name.toLowerCase().includes(q)) : items;
+    const groups = [];
+    CATEGORIES.forEach((cat) => {
+      const list = filtered.filter((i) => i.category === cat);
+      if (list.length > 0) groups.push([cat, list]);
+    });
+    return groups;
+  }, [items, materialQuery]);
 
   const activeObjects = [...objects].filter((o) => o.active).sort((a, b) => a.number.localeCompare(b.number, "ru", { numeric: true }));
   const allObjectsSorted = [...objects].sort((a, b) => a.number.localeCompare(b.number, "ru", { numeric: true }));
@@ -1875,13 +1912,56 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
         <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
           <label className="wh-span-2">
             Материал
-            <select value={itemId} onChange={(e) => setItemId(e.target.value)}>
-              {items.map((i) => (
-                <option key={i.id} value={i.id} disabled={i.quantity === 0}>
-                  {i.name} — остаток {fmtQty(i.quantity, i.unit)}{i.quantity === 0 ? " (нет в наличии)" : ""}
-                </option>
-              ))}
-            </select>
+            <div className="wh-material-combo">
+              <button
+                type="button"
+                className="wh-material-trigger"
+                onClick={() => setMaterialOpen((v) => !v)}
+              >
+                <span>
+                  {item ? `${item.name} — остаток ${fmtQty(item.quantity, item.unit)}` : "Выберите материал…"}
+                </span>
+                <ChevronDown size={15} />
+              </button>
+              {materialOpen && (
+                <>
+                  <div className="wh-pill-backdrop" onClick={() => { setMaterialOpen(false); setMaterialQuery(""); }} />
+                  <div className="wh-material-menu">
+                    <div className="wh-material-search">
+                      <Search size={14} />
+                      <input
+                        autoFocus
+                        placeholder="Начните вводить название…"
+                        value={materialQuery}
+                        onChange={(e) => setMaterialQuery(e.target.value)}
+                      />
+                    </div>
+                    <div className="wh-material-list">
+                      {materialGroups.length === 0 && <div className="wh-empty">Ничего не найдено</div>}
+                      {materialGroups.map(([cat, list]) => (
+                        <div key={cat}>
+                          <div className="wh-material-group-label">{CATEGORY_EMOJI[cat] || "📦"} {cat}</div>
+                          {list.map((i) => (
+                            <button
+                              type="button"
+                              key={i.id}
+                              disabled={i.quantity === 0}
+                              className={`wh-material-option ${i.id === itemId ? "selected" : ""}`}
+                              onClick={() => { setItemId(i.id); setMaterialOpen(false); setMaterialQuery(""); }}
+                            >
+                              <span className="wh-col-name">{i.name}</span>
+                              <span className="wh-mono wh-muted">
+                                {i.quantity === 0 ? "нет в наличии" : fmtQty(i.quantity, i.unit)}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </label>
           <label>
             Объект
@@ -1951,15 +2031,31 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
           <span>Кол-во</span>
           <span>Сумма</span>
           <span className="wh-col-name">Комментарий</span>
+          <span></span>
         </div>
         {filteredLog.map((s) => (
-          <div className="wh-row wh-row-log" key={s.id}>
+          <div className={`wh-row wh-row-log ${s.cancelled ? "wh-row-cancelled" : ""}`} key={s.id}>
             <span className="wh-mono wh-muted">{fmtDate(s.date)}{s.by && <span className="wh-by-name">{s.by}</span>}</span>
             <span className="wh-apt-badge" title={s.roomName}><BedDouble size={12} /> {s.roomNumber} · {s.roomName}</span>
             <span className="wh-col-name">{s.itemName}</span>
             <span className="wh-mono">{num(s.qty)}</span>
             <span className="wh-mono wh-strong">{rub(s.cost)}</span>
             <span className="wh-col-name wh-col-wrap wh-muted" title={s.note || ""}>{s.note || "—"}</span>
+            <span>
+              {s.cancelled ? (
+                <span className="wh-cancelled-badge" title={s.cancelledBy ? `Отменил(а): ${s.cancelledBy}` : ""}>Отменено</span>
+              ) : confirmingCancelId === s.id ? (
+                <span className="wh-inline-confirm wh-inline-confirm-tight">
+                  <span>Точно?</span>
+                  <button className="wh-btn-writeoff-submit" onClick={() => { onCancelIssue(s.id); setConfirmingCancelId(null); }}>Да</button>
+                  <button className="wh-btn-ghost" onClick={() => setConfirmingCancelId(null)}>Нет</button>
+                </span>
+              ) : (
+                <button className="wh-btn-ghost" onClick={() => setConfirmingCancelId(s.id)} title="Отменить эту выдачу и вернуть количество на склад">
+                  Отменить
+                </button>
+              )}
+            </span>
           </div>
         ))}
         {filteredLog.length === 0 && <div className="wh-empty">Записей не найдено</div>}
@@ -2334,18 +2430,23 @@ function ReportView({ items, issues, role, markupRate, onMarkupChange }) {
     if (!Number.isNaN(n) && n >= 0) onMarkupChange(n / 100);
   };
 
+  // Отменённые выдачи (ошибочно выданные и возвращённые на склад) не
+  // учитываются ни в одном отчёте — иначе себестоимость считалась бы по
+  // тому, чего на самом деле уже нет на руках у объекта.
+  const activeIssues = useMemo(() => issues.filter((s) => !s.cancelled), [issues]);
+
   const inRange = useMemo(() => {
     if (period === "7d" || period === "30d") {
       const days = period === "7d" ? 7 : 30;
       const d = new Date();
       d.setDate(d.getDate() - days);
       const cutoff = d.toISOString().slice(0, 10);
-      return issues.filter((s) => s.date >= cutoff);
+      return activeIssues.filter((s) => s.date >= cutoff);
     }
-    if (period === "month") return issues.filter((s) => s.date.slice(0, 7) === selectedMonthKey);
-    if (period === "year") return issues.filter((s) => s.date.slice(0, 4) === String(selectedYear));
-    return issues; // "all"
-  }, [issues, period, selectedMonthKey, selectedYear]);
+    if (period === "month") return activeIssues.filter((s) => s.date.slice(0, 7) === selectedMonthKey);
+    if (period === "year") return activeIssues.filter((s) => s.date.slice(0, 4) === String(selectedYear));
+    return activeIssues; // "all"
+  }, [activeIssues, period, selectedMonthKey, selectedYear]);
 
   const periodLabel = useMemo(() => {
     if (period === "7d") return "7 дней";
@@ -3140,12 +3241,29 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 
 .wh-table { width: 100%; max-width: 100%; background: var(--white); border-radius: 20px; box-shadow: var(--shadow-sm); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
 .wh-row {
-  display: grid; grid-template-columns: 2fr 132px 60px 90px 100px 130px;
+  display: grid; grid-template-columns: minmax(64px, 2fr) 132px 60px 90px 100px 130px;
   align-items: center; gap: 10px; padding: 12px 16px;
   border-bottom: 1px solid var(--line); font-size: 13.5px; font-family: 'Inter', sans-serif;
-  min-width: 600px;
+  min-width: 580px;
 }
-.wh-row-log { grid-template-columns: 92px 96px 1.6fr 70px 90px 1.6fr; min-width: 560px; }
+
+/* Наименование остаётся видимым при прокрутке строки вбок — "прилипает"
+   к левому краю, как закреплённая область в Excel. Нужен свой фон у ячейки,
+   иначе сквозь неё будет видно то, что уезжает под неё при прокрутке. */
+.wh-sticky-col {
+  position: sticky; left: 0; z-index: 2;
+  background: var(--white); padding-right: 10px;
+  box-shadow: 6px 0 8px -6px rgba(35,42,59,0.08);
+}
+.wh-row-head .wh-sticky-col { background: #F8F9FC; }
+.wh-sticky-col-low { background: #FDF1EF; }
+.wh-row-log { grid-template-columns: 92px 96px 1.6fr 70px 90px 1.6fr 100px; min-width: 660px; }
+.wh-row-cancelled { opacity: .55; text-decoration: line-through; }
+.wh-row-cancelled .wh-apt-badge, .wh-row-cancelled .wh-cancelled-badge { text-decoration: none; }
+.wh-cancelled-badge {
+  display: inline-flex; align-items: center; font-size: 11px; font-weight: 700;
+  color: var(--neg); background: #FDEDEA; padding: 5px 10px; border-radius: 999px;
+}
 .wh-row-receipt { grid-template-columns: 92px 1.8fr 110px 90px 110px 1.4fr; min-width: 620px; }
 .wh-row:last-child { border-bottom: none; }
 .wh-row-head { background: #F8F9FC; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; padding: 12px 16px; }
@@ -3268,6 +3386,40 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-pill-menu-item.selected { background: var(--indigo); color: #fff; font-weight: 600; }
 .wh-pill-menu-item.trailing { margin-top: 5px; border-top: 1px solid var(--line); padding-top: 11px; border-radius: 0 0 9px 9px; }
 .wh-pill-menu-check { width: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+/* ---- material combo (поисковый список материалов в выдаче) ---- */
+.wh-material-combo { position: relative; }
+.wh-material-trigger {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  font: inherit; font-size: 13.5px; text-align: left; color: var(--text);
+  border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px;
+  background: #F9FAFD; cursor: pointer;
+}
+.wh-material-trigger:hover { border-color: var(--indigo); }
+.wh-material-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 21;
+  background: var(--white); border-radius: 16px; box-shadow: var(--shadow-lg);
+  padding: 10px; max-height: 380px; display: flex; flex-direction: column;
+}
+.wh-material-search {
+  display: flex; align-items: center; gap: 8px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin-bottom: 8px; flex-shrink: 0;
+}
+.wh-material-search input { border: none; outline: none; font: inherit; font-size: 13.5px; width: 100%; background: transparent; color: var(--text); }
+.wh-material-list { overflow-y: auto; }
+.wh-material-group-label {
+  font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .02em;
+  padding: 8px 8px 4px;
+}
+.wh-material-option {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  border: none; background: transparent; text-align: left; font: inherit; font-size: 13px;
+  padding: 8px 8px; border-radius: 9px; cursor: pointer; color: var(--text);
+}
+.wh-material-option:hover { background: #F0F2FA; }
+.wh-material-option.selected { background: var(--indigo); color: #fff; }
+.wh-material-option.selected .wh-mono { color: rgba(255,255,255,0.8); }
+.wh-material-option:disabled { opacity: .45; cursor: not-allowed; }
 
 .wh-stat-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 26px; }
 .wh-stat-cards-5 { grid-template-columns: repeat(5, 1fr); }
