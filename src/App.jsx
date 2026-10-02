@@ -1927,14 +1927,23 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
                 <>
                   <div className="wh-pill-backdrop" onClick={() => { setMaterialOpen(false); setMaterialQuery(""); }} />
                   <div className="wh-material-menu">
-                    <div className="wh-material-search">
-                      <Search size={14} />
-                      <input
-                        autoFocus
-                        placeholder="Начните вводить название…"
-                        value={materialQuery}
-                        onChange={(e) => setMaterialQuery(e.target.value)}
-                      />
+                    <div className="wh-material-menu-header">
+                      <div className="wh-material-search">
+                        <Search size={14} />
+                        <input
+                          autoFocus
+                          placeholder="Начните вводить название…"
+                          value={materialQuery}
+                          onChange={(e) => setMaterialQuery(e.target.value)}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="wh-material-close"
+                        onClick={() => { setMaterialOpen(false); setMaterialQuery(""); }}
+                      >
+                        <X size={16} /> Закрыть
+                      </button>
                     </div>
                     <div className="wh-material-list">
                       {materialGroups.length === 0 && <div className="wh-empty">Ничего не найдено</div>}
@@ -3401,12 +3410,19 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   background: var(--white); border-radius: 16px; box-shadow: var(--shadow-lg);
   padding: 10px; max-height: 380px; display: flex; flex-direction: column;
 }
+.wh-material-menu-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-shrink: 0; }
+.wh-material-close {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+  border: none; background: #F0F2FA; color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 9px 12px; border-radius: 10px; cursor: pointer;
+}
+.wh-material-close:hover { background: #E4E9FB; }
 .wh-material-search {
-  display: flex; align-items: center; gap: 8px; color: var(--muted);
-  border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin-bottom: 8px; flex-shrink: 0;
+  display: flex; align-items: center; gap: 8px; color: var(--muted); flex: 1 1 auto; min-width: 0;
+  border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin-bottom: 0;
 }
 .wh-material-search input { border: none; outline: none; font: inherit; font-size: 13.5px; width: 100%; background: transparent; color: var(--text); }
-.wh-material-list { overflow-y: auto; }
+.wh-material-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .wh-material-group-label {
   font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .02em;
   padding: 8px 8px 4px;
@@ -3491,5 +3507,17 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
     padding: 12px 16px; background: var(--white);
     border-top: 1px solid var(--line); border-radius: 0 0 22px 22px;
   }
+
+  /* На телефоне это меню — полноэкранное окно, а не плавающая панель под
+     полем: так открытая клавиатура не перекрывает список, а кнопка
+     "Закрыть" в шапке всегда на виду и не зависит от клика по фону, который
+     на мобильном мог срабатывать ненадёжно (особенно с открытой клавиатурой). */
+  .wh-material-menu {
+    position: fixed; inset: 0; z-index: 60;
+    border-radius: 0; max-height: none;
+    padding: calc(env(safe-area-inset-top, 0px) + 18px) 14px 14px;
+  }
+  .wh-material-menu-header { margin-bottom: 12px; }
+  .wh-material-close { padding: 11px 14px; }
 }
 `;
