@@ -1504,6 +1504,30 @@ function ReceiveForm({ items, receipts = [], purchaseOptions = [], initialMode =
   const [mode, setMode] = useState(initialMode); // "existing" | "new"
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [supplier, setSupplier] = useState("");
+  const [materialQuery, setMaterialQuery] = useState("");
+  const [materialOpen, setMaterialOpen] = useState(false);
+
+  // Материалы для выпадающего списка — сгруппированные по категориям и
+  // отфильтрованные по поиску, как и в форме выдачи, чтобы среди десятков
+  // позиций можно было быстро найти нужную.
+  const materialGroups = useMemo(() => {
+    const q = materialQuery.trim().toLowerCase();
+    const filtered = q ? items.filter((i) => i.name.toLowerCase().includes(q)) : items;
+    const groups = [];
+    CATEGORIES.forEach((cat) => {
+      const list = filtered.filter((i) => i.category === cat);
+      if (list.length > 0) groups.push([cat, list]);
+    });
+    return groups;
+  }, [items, materialQuery]);
+
+  const closeMaterialMenu = () => {
+    setMaterialOpen(false);
+    setMaterialQuery("");
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  };
 
   // Расчёт через упаковку: сколько единиц в одной закупленной упаковке,
   // сколько стоит упаковка и сколько таких упаковок пришло в этой партии.
@@ -1614,16 +1638,62 @@ function ReceiveForm({ items, receipts = [], purchaseOptions = [], initialMode =
 
       <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
         {mode === "existing" ? (
-          <label className="wh-span-2">
+          <div className="wh-span-2 wh-field-block">
             Материал
-            <select value={itemId} onChange={(e) => setItemId(e.target.value)}>
-              {items.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name} — сейчас {fmtQty(i.quantity, i.unit)} по {rub(i.unitCost)}
-                </option>
-              ))}
-            </select>
-          </label>
+            <div className="wh-material-combo">
+              <button
+                type="button"
+                className="wh-material-trigger"
+                onClick={() => setMaterialOpen((v) => !v)}
+              >
+                <span>
+                  {existingItem
+                    ? `${existingItem.name} — сейчас ${fmtQty(existingItem.quantity, existingItem.unit)} по ${rub(existingItem.unitCost)}`
+                    : "Выберите материал…"}
+                </span>
+                <ChevronDown size={15} />
+              </button>
+              {materialOpen && (
+                <>
+                  <div className="wh-pill-backdrop" onClick={closeMaterialMenu} />
+                  <div className="wh-material-menu">
+                    <div className="wh-material-menu-header">
+                      <div className="wh-material-search">
+                        <Search size={14} />
+                        <input
+                          placeholder="Начните вводить название…"
+                          value={materialQuery}
+                          onChange={(e) => setMaterialQuery(e.target.value)}
+                        />
+                      </div>
+                      <button type="button" className="wh-material-close" onClick={closeMaterialMenu}>
+                        <X size={16} /> Закрыть
+                      </button>
+                    </div>
+                    <div className="wh-material-list">
+                      {materialGroups.length === 0 && <div className="wh-empty">Ничего не найдено</div>}
+                      {materialGroups.map(([cat, list]) => (
+                        <div key={cat}>
+                          <div className="wh-material-group-label">{CATEGORY_EMOJI[cat] || "📦"} {cat}</div>
+                          {list.map((i) => (
+                            <button
+                              type="button"
+                              key={i.id}
+                              className={`wh-material-option ${i.id === itemId ? "selected" : ""}`}
+                              onClick={() => { setItemId(i.id); closeMaterialMenu(); }}
+                            >
+                              <span className="wh-col-name">{i.name}</span>
+                              <span className="wh-mono wh-muted">{fmtQty(i.quantity, i.unit)} · {rub(i.unitCost)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         ) : (
           <>
             <label className="wh-span-2">
@@ -3069,7 +3139,7 @@ html, body, #root {
 }
 .wh-tab-pill { display: inline-flex; gap: 4px; background: #F6F8FC; border-radius: 999px; padding: 4px; max-width: 100%; overflow-x: auto; }
 .wh-tab-pill button {
-  border: none; background: transparent; cursor: pointer;
+  border: none; background: transparent; cursor: pointer; flex-shrink: 0;
   font-family: 'Inter', sans-serif; font-weight: 600; font-size: 13px;
   padding: 9px 16px; border-radius: 999px; color: var(--muted); white-space: nowrap;
   transition: background .15s ease, color .15s ease;
@@ -3142,6 +3212,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 .wh-btn-icon-export:active { transform: translateY(0); }
 
 .wh-header-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.wh-header-actions > * { flex-shrink: 0; }
 .wh-btn-secondary {
   display: inline-flex; align-items: center; gap: 7px;
   background: #EEF0FF; color: var(--indigo-dark); border: none;
@@ -3390,7 +3461,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 /* ---- report ---- */
 .wh-report-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .wh-period-switch { display: flex; gap: 4px; background: #F6F8FC; border-radius: 999px; padding: 4px; }
-.wh-period-switch button { border: none; background: transparent; font: inherit; font-size: 12.5px; font-weight: 600; padding: 8px 14px; border-radius: 999px; cursor: pointer; color: var(--muted); }
+.wh-period-switch button { border: none; background: transparent; font: inherit; font-size: 12.5px; font-weight: 600; padding: 8px 14px; border-radius: 999px; cursor: pointer; color: var(--muted); flex-shrink: 0; white-space: nowrap; }
 .wh-period-switch button.active { background: var(--indigo); color: #fff; }
 .wh-pill-dropdown { position: relative; }
 .wh-pill-trigger {
