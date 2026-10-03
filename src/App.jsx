@@ -1921,7 +1921,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
 
       <div className="wh-panel wh-panel-static">
         <div className="wh-form-grid" style={FORCE_STACK_STYLE}>
-          <label className="wh-span-2">
+          <div className="wh-span-2 wh-field-block">
             Материал
             <div className="wh-material-combo">
               <button
@@ -1981,7 +1981,7 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
                 </>
               )}
             </div>
-          </label>
+          </div>
           <label>
             Объект
             <select value={objectId} onChange={(e) => setObjectId(e.target.value)}>
@@ -2931,6 +2931,17 @@ function AuditLogView({ log, items, onRestoreItem, onRestoreLegacy }) {
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 
+/* Коренной фикс "расползания страницы вширь" на мобильном — а не починка
+   каждого отдельного места по одному. У flex/grid-элементов браузер по
+   умолчанию не даёт им сжиматься меньше их содержимого (min-width: auto) —
+   из-за этого один длинный текст где угодно в приложении мог раздвинуть
+   всю страницу и сломать масштаб, независимо от overflow на предках.
+   Здесь сбрасываем это умолчание для вообще всех элементов приложения —
+   а те немногие места, которым специально нужна более широкая минимальная
+   ширина (прокручиваемые таблицы), задают её явно своим собственным,
+   более специфичным правилом ниже, и оно всё равно победит. */
+.wh-root * { min-width: 0; }
+
 .wh-root {
   --bg:#EEF2F8;
   --white:#FFFFFF;
@@ -3236,7 +3247,7 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 
 .wh-form-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
 .wh-span-2 { grid-column: span 2; }
-.wh-form-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.wh-form-grid label, .wh-form-grid .wh-field-block { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
 .wh-form-grid input, .wh-form-grid select {
   font: inherit; font-size: 13.5px; color: var(--text); font-family: 'Inter', sans-serif;
   border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; background: #F9FAFD;
