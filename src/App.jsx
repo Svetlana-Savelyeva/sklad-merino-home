@@ -14,7 +14,7 @@ const APP_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS
 
 // ---------- seed data ----------
 
-const CATEGORIES = ["Продукты", "Санузел и комплектация гостя", "Кухня", "Стирка", "Хозяйственные расходники", "Средства для уборки"];
+const CATEGORIES = ["Продукты", "Санузел и комплектация гостя", "Кухня", "Стирка", "Хозяйственные расходники", "Средства для уборки", "3D"];
 
 const CATEGORY_EMOJI = {
   "Продукты": "🛒",
@@ -23,6 +23,7 @@ const CATEGORY_EMOJI = {
   "Стирка": "🧺",
   "Хозяйственные расходники": "🧹",
   "Средства для уборки": "🧴",
+  "3D": "🖨️",
 };
 
 const seedItems = [
@@ -382,8 +383,8 @@ const exportAssets = (assets, transfers, objects, warehouses) => {
 // нужна авторизация на сервере с проверкой пароля вне браузера пользователя.
 
 const ROLES = {
-  admin: { label: "Администратор", emoji: "🛠️", password: "admin2026", tabs: ["catalog", "issue", "assets", "report", "prices", "audit"], defaultTab: "catalog" },
-  warehouse: { label: "Сотрудник склада", emoji: "📦", password: "sklad2026", tabs: ["issue", "assets"], defaultTab: "issue" },
+  admin: { label: "Администратор", emoji: "🛠️", password: "admin2026", tabs: ["catalog", "issue", "assets", "lists", "report", "prices", "audit"], defaultTab: "catalog" },
+  warehouse: { label: "Сотрудник склада", emoji: "📦", password: "sklad2026", tabs: ["issue", "assets", "lists"], defaultTab: "issue" },
   finance: { label: "Финансовый отдел", emoji: "📊", password: "finotdel2026", tabs: ["report", "prices"], defaultTab: "report" },
 };
 
@@ -391,6 +392,7 @@ const TAB_META = {
   catalog: { label: "Каталог", emoji: "📦" },
   issue: { label: "Выдача", emoji: "📤" },
   assets: { label: "Инвентарь", emoji: "🛏️" },
+  lists: { label: "Чек-листы", emoji: "✅" },
   report: { label: "Отчёты", emoji: "📊" },
   prices: { label: "Цены", emoji: "📈" },
   audit: { label: "Журнал", emoji: "📝" },
@@ -501,6 +503,7 @@ export default function WarehouseApp() {
   const [warehouses, setWarehouses] = useState(seedWarehouses);
   const [changeLog, setChangeLog] = useState([]);
   const [purchaseOptions, setPurchaseOptions] = useState(seedPurchaseOptions);
+  const [checklists, setChecklists] = useState([]);
   const [role, setRole] = useState(null); // null = не авторизован, показываем экран входа
   const [userName, setUserName] = useState("");
   const [tab, setTab] = useState("catalog");
@@ -573,7 +576,7 @@ export default function WarehouseApp() {
       } catch {
         fresh = null;
       }
-      const base = fresh || { items, issues, receipts, objects, assets, assetTransfers, warehouses, changeLog, purchaseOptions, markupRate };
+      const base = fresh || { items, issues, receipts, objects, assets, assetTransfers, warehouses, changeLog, purchaseOptions, checklists, markupRate };
       const payload = {
         items: partial.items ?? base.items ?? items,
         issues: partial.issues ?? base.issues ?? issues,
@@ -584,6 +587,7 @@ export default function WarehouseApp() {
         warehouses: partial.warehouses ?? base.warehouses ?? warehouses,
         changeLog: partial.changeLog ?? base.changeLog ?? changeLog,
         purchaseOptions: partial.purchaseOptions ?? base.purchaseOptions ?? purchaseOptions,
+        checklists: partial.checklists ?? base.checklists ?? checklists,
         markupRate: partial.markupRate ?? base.markupRate ?? markupRate,
       };
       await persistPayload(payload);
@@ -600,6 +604,7 @@ export default function WarehouseApp() {
         if (partial.warehouses === undefined) setWarehouses(payload.warehouses);
         if (partial.changeLog === undefined) setChangeLog(payload.changeLog);
         if (partial.purchaseOptions === undefined) setPurchaseOptions(payload.purchaseOptions);
+        if (partial.checklists === undefined) setChecklists(payload.checklists);
         if (partial.markupRate === undefined) setMarkupRate(payload.markupRate);
       }
     })()
@@ -641,6 +646,7 @@ export default function WarehouseApp() {
       const finalWarehouses = loaded?.warehouses ?? seedWarehouses;
       const finalChangeLog = loaded?.changeLog ?? [];
       const finalPurchaseOptions = loaded?.purchaseOptions ?? seedPurchaseOptions;
+      const finalChecklists = loaded?.checklists ?? [];
       const finalRate = loaded?.markupRate ?? 0.3;
 
       setItems(finalItems);
@@ -652,6 +658,7 @@ export default function WarehouseApp() {
       setWarehouses(finalWarehouses);
       setChangeLog(finalChangeLog);
       setPurchaseOptions(finalPurchaseOptions);
+      setChecklists(finalChecklists);
       setMarkupRate(finalRate);
 
       // Если в базе ещё ничего не было (самый первый запуск) — сразу
@@ -660,7 +667,7 @@ export default function WarehouseApp() {
         persistPayload({
           items: finalItems, issues: finalIssues, receipts: finalReceipts, objects: finalObjects,
           assets: finalAssets, assetTransfers: finalAssetTransfers, warehouses: finalWarehouses,
-          changeLog: finalChangeLog, purchaseOptions: finalPurchaseOptions, markupRate: finalRate,
+          changeLog: finalChangeLog, purchaseOptions: finalPurchaseOptions, checklists: finalChecklists, markupRate: finalRate,
         }).catch((e) => console.error("Ошибка первичного сохранения:", e));
       }
 
@@ -934,6 +941,55 @@ export default function WarehouseApp() {
     logChange("Удалён тип инвентаря", `«${asset?.name || id}»`, { assets: newAssets });
   };
 
+  // ---------- чек-листы (разовые поставки по объектам) ----------
+  // Чек-лист строится из активных объектов на момент создания. Объекты,
+  // появившиеся позже, в него сами не попадают — их приложение подсвечивает
+  // и предлагает добавить одной кнопкой.
+  const createChecklist = (title, stageLabels) => {
+    const t = title.trim();
+    if (!t) return null;
+    const list = {
+      id: nextId("cl"), title: t, createdAt: nowStamp(), createdBy: userName,
+      stages: stageLabels.map((label, i) => ({ key: `s${i}`, label })),
+      objectIds: objects.filter((o) => o.active !== false).map((o) => o.id),
+      marks: {},
+    };
+    const next = [list, ...checklists];
+    setChecklists(next);
+    logChange("Создан чек-лист", `«${t}» (${list.objectIds.length} объектов)`, { checklists: next });
+    return list.id;
+  };
+
+  const deleteChecklist = (id) => {
+    const list = checklists.find((c) => c.id === id);
+    const next = checklists.filter((c) => c.id !== id);
+    setChecklists(next);
+    logChange("Удалён чек-лист", `«${list?.title || id}»`, { checklists: next });
+  };
+
+  const toggleChecklistMark = (listId, objectId, stage) => {
+    const next = checklists.map((c) => {
+      if (c.id !== listId) return c;
+      const cur = c.marks[objectId] || {};
+      const nextCur = { ...cur };
+      if (cur[stage]) delete nextCur[stage];
+      else nextCur[stage] = { by: userName, at: nowStamp() };
+      return { ...c, marks: { ...c.marks, [objectId]: nextCur } };
+    });
+    setChecklists(next);
+    saveState({ checklists: next });
+  };
+
+  const addNewObjectsToChecklist = (listId) => {
+    const next = checklists.map((c) => {
+      if (c.id !== listId) return c;
+      const missing = objects.filter((o) => o.active !== false && !c.objectIds.includes(o.id)).map((o) => o.id);
+      return { ...c, objectIds: [...c.objectIds, ...missing] };
+    });
+    setChecklists(next);
+    saveState({ checklists: next });
+  };
+
   // Добавление ещё одного склада как локации для перемещения инвентаря
   // (например, открылся третий склад). Новый склад стартует пустым — всё,
   // что в него нужно, перемещается с других складов через обычный перевод.
@@ -1083,6 +1139,16 @@ export default function WarehouseApp() {
               onRemoveAssetType={removeAssetType}
               onTransfer={transferAsset}
               onAddWarehouse={addWarehouse}
+            />
+          )}
+          {(role === "admin" || role === "warehouse") && tab === "lists" && (
+            <ChecklistsView
+              checklists={checklists}
+              objects={objects}
+              onCreate={createChecklist}
+              onDelete={deleteChecklist}
+              onToggle={toggleChecklistMark}
+              onAddNew={addNewObjectsToChecklist}
             />
           )}
           {(role === "admin" || role === "finance") && tab === "report" && (
@@ -2993,6 +3059,268 @@ function AuditLogView({ log, items, onRestoreItem, onRestoreLegacy }) {
           );
         })}
         {filtered.length === 0 && <div className="wh-empty">{log.length === 0 ? "Изменений пока не было" : "Ничего не найдено"}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Чек-листы ----------
+const CHECK_STAGES = [
+  { key: "printed", label: "Напечатано" },
+  { key: "delivered", label: "Отвезено" },
+  { key: "installed", label: "Установлено" },
+];
+
+const stagesOf = (c) => (c && c.stages && c.stages.length ? c.stages : CHECK_STAGES);
+
+const STAGE_PRESETS = [
+  { name: "Отвезено → Установлено", text: "Отвезено, Установлено" },
+  { name: "Куплено → Отвезено → Установлено", text: "Куплено, Отвезено, Установлено" },
+  { name: "Напечатано → Отвезено → Установлено", text: "Напечатано, Отвезено, Установлено" },
+];
+
+function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onAddNew }) {
+  const [openId, setOpenId] = useState(null);
+  const [newTitle, setNewTitle] = useState("");
+  const [onlyOpen, setOnlyOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [stagesText, setStagesText] = useState(STAGE_PRESETS[0].text);
+
+  const list = checklists.find((c) => c.id === openId) || null;
+  const objById = useMemo(() => Object.fromEntries(objects.map((o) => [o.id, o])), [objects]);
+
+  const isDone = (c, oid) => {
+    const m = c.marks[oid] || {};
+    return stagesOf(c).every((st) => m[st.key]);
+  };
+
+  const sortObjs = (arr) => [...arr].sort((a, b) => (a.number || "").localeCompare(b.number || "", "ru", { numeric: true }));
+
+  const create = () => {
+    const labels = stagesText.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 5);
+    if (labels.length === 0) return;
+    const id = onCreate(newTitle, labels);
+    if (id) { setNewTitle(""); setOpenId(id); }
+  };
+
+  // ----- список чек-листов -----
+  if (!list) {
+    return (
+      <div>
+        <div className="wh-panel" style={{ marginBottom: 14 }}>
+          <h2 style={{ margin: "0 0 4px", fontSize: 17 }}>Чек-листы по объектам</h2>
+          <p style={{ margin: "0 0 12px", color: "var(--muted)", fontSize: 13 }}>
+            Для разовых поставок в квартиры: баночки для чая, рамки с инструкциями, тапочки и т.п. Список объектов подставится сам, этапы вы выбираете сами.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <input
+              className="wh-search"
+              style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px" }}
+              placeholder="Название, например: Баночка для чая"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") create(); }}
+            />
+            <div style={{ fontSize: 12.5, color: "var(--muted)" }}>Что нужно отмечать по каждому объекту (этапы):</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {STAGE_PRESETS.map((pr) => (
+                <button
+                  key={pr.text}
+                  type="button"
+                  onClick={() => setStagesText(pr.text)}
+                  style={{ flexShrink: 0, whiteSpace: "nowrap", cursor: "pointer", padding: "7px 12px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, border: "none", background: stagesText === pr.text ? "var(--indigo)" : "#fff", color: stagesText === pr.text ? "#fff" : "var(--text)" }}
+                >
+                  {pr.name}
+                </button>
+              ))}
+            </div>
+            <input
+              className="wh-search"
+              style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px" }}
+              placeholder="Свои этапы через запятую, например: Куплено, Установлено"
+              value={stagesText}
+              onChange={(e) => setStagesText(e.target.value)}
+            />
+            <button type="button" className="wh-btn-primary" style={{ justifyContent: "center" }} onClick={create} disabled={!newTitle.trim() || !stagesText.trim()}>
+              <Plus size={15} /> Создать чек-лист
+            </button>
+          </div>
+        </div>
+
+        {checklists.length === 0 && (
+          <div className="wh-panel" style={{ color: "var(--muted)", fontSize: 13.5 }}>Пока нет ни одного чек-листа.</div>
+        )}
+
+        {checklists.map((c) => {
+          const total = c.objectIds.length;
+          const done = c.objectIds.filter((oid) => isDone(c, oid)).length;
+          const fresh = objects.filter((o) => o.active !== false && !c.objectIds.includes(o.id)).length;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              className="wh-panel"
+              onClick={() => { setOpenId(c.id); setOnlyOpen(false); setQuery(""); setConfirmDelete(false); }}
+              style={{ display: "block", width: "100%", textAlign: "left", cursor: "pointer", marginBottom: 10, border: fresh ? "2px solid #F5A524" : undefined }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 15 }}>📋 {c.title}</div>
+              <div style={{ color: "var(--muted)", fontSize: 12.5, margin: "4px 0 8px" }}>
+                Готово полностью: {done} из {total} · создал(а) {c.createdBy || "—"}, {fmtDateTime(c.createdAt)}
+              </div>
+              <div style={{ height: 8, borderRadius: 99, background: "var(--line)", overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${total ? (done / total) * 100 : 0}%`, background: "var(--pos)" }} />
+              </div>
+              {fresh > 0 && (
+                <div style={{ marginTop: 8, color: "#B26A00", fontWeight: 600, fontSize: 13 }}>
+                  ⚠️ Новых объектов без этой позиции: {fresh}
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ----- один чек-лист -----
+  const missing = sortObjs(objects.filter((o) => o.active !== false && !list.objectIds.includes(o.id)));
+  const inList = sortObjs(list.objectIds.map((id) => objById[id]).filter(Boolean));
+  const total = inList.length;
+  const done = inList.filter((o) => isDone(list, o.id)).length;
+  const q = query.trim().toLowerCase();
+  const shown = inList.filter((o) => {
+    if (onlyOpen && isDone(list, o.id)) return false;
+    if (q && !`${o.number} ${o.name}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const stages = stagesOf(list);
+  const stageCount = (key) => inList.filter((o) => (list.marks[o.id] || {})[key]).length;
+
+  const exportXlsx = () => {
+    const rows = sortObjs([...inList]).map((o) => {
+      const m = list.marks[o.id] || {};
+      const row = { "№": o.number, "Объект": o.name, "Статус": o.active === false ? "неактивен" : "" };
+      stages.forEach((st) => {
+        row[st.label] = m[st.key] ? "да" : "";
+        row[`${st.label} — кто, когда`] = m[st.key] ? `${m[st.key].by || ""} ${fmtDateTime(m[st.key].at)}` : "";
+      });
+      return row;
+    });
+    missing.forEach((o) => rows.push({ "№": o.number, "Объект": o.name, "Статус": "НОВЫЙ — не добавлен в чек-лист" }));
+    downloadWorkbook([{ name: "Чек-лист", rows }], `chek-list-${todayISO()}.xlsx`);
+  };
+
+  return (
+    <div>
+      <button type="button" className="wh-btn-ghost" style={{ marginBottom: 10 }} onClick={() => setOpenId(null)}>
+        ← Все чек-листы
+      </button>
+
+      <div className="wh-panel" style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+          <h2 style={{ margin: 0, fontSize: 17 }}>📋 {list.title}</h2>
+          <button type="button" className="wh-btn-ghost" title="Скачать в Excel" aria-label="Скачать в Excel" onClick={exportXlsx} style={{ flexShrink: 0 }}>
+            <FileSpreadsheet size={16} />
+          </button>
+        </div>
+        <div style={{ color: "var(--muted)", fontSize: 12.5, margin: "6px 0 8px" }}>
+          Полностью готово: <b>{done}</b> из <b>{total}</b>
+        </div>
+        <div style={{ height: 8, borderRadius: 99, background: "var(--line)", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${total ? (done / total) * 100 : 0}%`, background: "var(--pos)" }} />
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8, fontSize: 12.5, color: "var(--muted)" }}>
+          {stages.map((st) => (<span key={st.key}>{st.label}: <b>{stageCount(st.key)}</b></span>))}
+        </div>
+      </div>
+
+      {missing.length > 0 && (
+        <div style={{ background: "#FFF4DC", border: "2px solid #F5A524", borderRadius: 14, padding: 14, marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: "#8A5200", marginBottom: 6 }}>
+            ⚠️ Новые объекты — в этом чек-листе их ещё нет ({missing.length})
+          </div>
+          <div style={{ fontSize: 13, color: "#8A5200", marginBottom: 10, lineHeight: 1.5 }}>
+            {missing.map((o) => `${o.number} ${o.name}`).join(", ")}
+          </div>
+          <button type="button" className="wh-btn-primary" onClick={() => onAddNew(list.id)}>
+            <Plus size={15} /> Добавить в чек-лист
+          </button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+        <input
+          className="wh-search"
+          style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px" }}
+          placeholder="Найти объект"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={() => setOnlyOpen(false)} style={{ flexShrink: 0, whiteSpace: "nowrap", cursor: "pointer", padding: "8px 14px", borderRadius: 999, fontSize: 13, fontWeight: 600, border: "none", background: !onlyOpen ? "var(--indigo)" : "#fff", color: !onlyOpen ? "#fff" : "var(--text)" }}>Все</button>
+          <button type="button" onClick={() => setOnlyOpen(true)} style={{ flexShrink: 0, whiteSpace: "nowrap", cursor: "pointer", padding: "8px 14px", borderRadius: 999, fontSize: 13, fontWeight: 600, border: "none", background: onlyOpen ? "var(--indigo)" : "#fff", color: onlyOpen ? "#fff" : "var(--text)" }}>Только не сделано</button>
+        </div>
+      </div>
+
+      {shown.length === 0 && (
+        <div className="wh-panel" style={{ color: "var(--muted)", fontSize: 13.5 }}>
+          {onlyOpen && !q ? "Всё сделано 🎉" : "Ничего не найдено."}
+        </div>
+      )}
+
+      {shown.map((o) => {
+        const m = list.marks[o.id] || {};
+        const full = isDone(list, o.id);
+        return (
+          <div key={o.id} className="wh-panel" style={{ marginBottom: 8, padding: 12, background: full ? "#EAFBF3" : undefined }}>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
+              {full ? "✅ " : ""}{o.number} · {o.name}
+              {o.active === false && <span style={{ color: "var(--muted)", fontWeight: 400 }}> (неактивен)</span>}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {stages.map((st) => {
+                const mark = m[st.key];
+                return (
+                  <button
+                    key={st.key}
+                    type="button"
+                    onClick={() => onToggle(list.id, o.id, st.key)}
+                    title={mark ? `${mark.by || ""} · ${fmtDateTime(mark.at)}` : ""}
+                    style={{
+                      flexShrink: 0, whiteSpace: "nowrap", cursor: "pointer",
+                      padding: "8px 12px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+                      border: mark ? "1.5px solid var(--pos)" : "1.5px solid var(--muted-2)",
+                      background: mark ? "var(--pos)" : "#fff",
+                      color: mark ? "#fff" : "var(--text)",
+                    }}
+                  >
+                    {mark ? "✓ " : ""}{st.label}
+                  </button>
+                );
+              })}
+            </div>
+            {stages.some((st) => m[st.key]) && (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.5 }}>
+                {stages.filter((st) => m[st.key]).map((st) => `${st.label}: ${m[st.key].by || "—"}, ${fmtDateTime(m[st.key].at)}`).join(" · ")}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div style={{ marginTop: 16 }}>
+        {!confirmDelete ? (
+          <button type="button" className="wh-btn-ghost" onClick={() => setConfirmDelete(true)}>
+            <Trash2 size={14} /> Удалить чек-лист
+          </button>
+        ) : (
+          <div className="wh-inline-confirm">
+            <span>Удалить «{list.title}» вместе со всеми отметками?</span>
+            <button type="button" className="wh-btn-primary" onClick={() => { onDelete(list.id); setOpenId(null); }}>Да, удалить</button>
+            <button type="button" className="wh-btn-ghost" onClick={() => setConfirmDelete(false)}>Отмена</button>
+          </div>
+        )}
       </div>
     </div>
   );
