@@ -792,10 +792,18 @@ export default function WarehouseApp() {
   // Управление реестром объектов: добавление нового и мягкое включение/
   // выключение (объекты не удаляются физически, чтобы не потерять ссылки
   // из уже сделанных выдач и отчётов по ним).
-  const addObject = (number, name) => {
-    const newObjects = [...objects, { id: nextId("o"), number: number.trim(), name: name.trim(), active: true }];
+  // retireId — если у нового объекта тот же номер, что и у выбывшего старого:
+  // старый сразу помечается выбывшим (его прошлые выдачи остаются как были).
+  const addObject = (number, name, retireId = null) => {
+    const old = retireId ? objects.find((o) => o.id === retireId) : null;
+    const base = old ? objects.map((o) => (o.id === retireId ? { ...o, active: false } : o)) : objects;
+    const newObjects = [...base, { id: nextId("o"), number: number.trim(), name: name.trim(), active: true }];
     setObjects(newObjects);
-    logChange("Добавлен объект", `${number.trim()} — ${name.trim()}`, { objects: newObjects });
+    logChange(
+      "Добавлен объект",
+      old ? `${number.trim()} — ${name.trim()} (вместо выбывшего «${old.name}»)` : `${number.trim()} — ${name.trim()}`,
+      { objects: newObjects }
+    );
   };
 
   const toggleObjectActive = (id) => {
@@ -980,10 +988,36 @@ export default function WarehouseApp() {
     saveState({ checklists: next });
   };
 
+  // Убрать объект из чек-листа (не участвует в этой поставке) и вернуть обратно.
+  // Убранные запоминаются в excluded, чтобы приложение не принимало их за «новые».
+  const excludeFromChecklist = (listId, objectId) => {
+    const next = checklists.map((c) =>
+      c.id !== listId ? c : {
+        ...c,
+        objectIds: c.objectIds.filter((id) => id !== objectId),
+        excluded: [...(c.excluded || []).filter((id) => id !== objectId), objectId],
+      }
+    );
+    setChecklists(next);
+    saveState({ checklists: next });
+  };
+
+  const restoreToChecklist = (listId, objectId) => {
+    const next = checklists.map((c) =>
+      c.id !== listId ? c : {
+        ...c,
+        objectIds: c.objectIds.includes(objectId) ? c.objectIds : [...c.objectIds, objectId],
+        excluded: (c.excluded || []).filter((id) => id !== objectId),
+      }
+    );
+    setChecklists(next);
+    saveState({ checklists: next });
+  };
+
   const addNewObjectsToChecklist = (listId) => {
     const next = checklists.map((c) => {
       if (c.id !== listId) return c;
-      const missing = objects.filter((o) => o.active !== false && !c.objectIds.includes(o.id)).map((o) => o.id);
+      const missing = objects.filter((o) => o.active !== false && !c.objectIds.includes(o.id) && !(c.excluded || []).includes(o.id)).map((o) => o.id);
       return { ...c, objectIds: [...c.objectIds, ...missing] };
     });
     setChecklists(next);
@@ -1149,6 +1183,8 @@ export default function WarehouseApp() {
               onDelete={deleteChecklist}
               onToggle={toggleChecklistMark}
               onAddNew={addNewObjectsToChecklist}
+              onExclude={excludeFromChecklist}
+              onRestore={restoreToChecklist}
             />
           )}
           {(role === "admin" || role === "finance") && tab === "report" && (
@@ -1933,6 +1969,9 @@ function EditItemForm({ item, onSave, onClose }) {
 function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggleObjectActive, onClearIssues, onCancelIssue }) {
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [objectId, setObjectId] = useState("");
+  const [retireAsk, setRetireAsk] = useState(null); // { oldObj, newObj } — вопрос «старый объект выбыл?» при выборе в выдаче
+  const [addAsk, setAddAsk] = useState(null); // { oldObj } — вопрос при добавлении объекта с уже занятым номером
+  const [dupDismissed, setDupDismissed] = useState([]);
   const [qty, setQty] = useState("1");
   const [note, setNote] = useState("");
   const [filter, setFilter] = useState("");
@@ -1985,11 +2024,30 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
     setNote("");
   };
 
-  const addObjectSubmit = () => {
-    if (!newNumber.trim() || !newName.trim()) return;
-    onAddObject(newNumber, newName);
+  const finishAdd = (retireId) => {
+    onAddObject(newNumber, newName, retireId);
     setNewNumber("");
     setNewName("");
+    setAddAsk(null);
+  };
+
+  const addObjectSubmit = () => {
+    if (!newNumber.trim() || !newName.trim()) return;
+    const sameNumber = objects.find((o) => o.active && o.number.trim().toLowerCase() === newNumber.trim().toLowerCase());
+    if (sameNumber) { setAddAsk({ oldObj: sameNumber }); return; }
+    finishAdd(null);
+  };
+
+  // Выбор объекта в выдаче: если у выбранного номера есть ещё один активный
+  // объект (более старый), спрашиваем, не выбыл ли старый.
+  const chooseObject = (id) => {
+    setObjectId(id);
+    setRetireAsk(null);
+    const chosen = objects.find((o) => o.id === id);
+    if (!chosen) return;
+    const idx = objects.indexOf(chosen);
+    const older = objects.find((o, i) => o.active && o.id !== id && i < idx && o.number.trim().toLowerCase() === chosen.number.trim().toLowerCase());
+    if (older && !dupDismissed.includes(`${older.id}|${chosen.id}`)) setRetireAsk({ oldObj: older, newObj: chosen });
   };
 
   const withNames = issues.map((s) => ({
@@ -2041,6 +2099,16 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
               <button className="wh-btn-primary" onClick={addObjectSubmit}>Добавить</button>
             </div>
           </div>
+          {addAsk && (
+            <div className="wh-inline-confirm" style={{ flexWrap: "wrap", marginBottom: 14 }}>
+              <span>
+                Номер {addAsk.oldObj.number} уже занят объектом «{addAsk.oldObj.name}». Он вышел из работы?
+              </span>
+              <button type="button" className="wh-btn-primary" onClick={() => finishAdd(addAsk.oldObj.id)}>Да, «{addAsk.oldObj.name}» выбыл</button>
+              <button type="button" className="wh-btn-ghost" onClick={() => finishAdd(null)}>Нет, работают оба</button>
+              <button type="button" className="wh-btn-ghost" onClick={() => setAddAsk(null)}>Отмена</button>
+            </div>
+          )}
           <div className="wh-objects-list">
             {allObjectsSorted.map((o) => (
               <div className={`wh-object-row ${o.active ? "" : "inactive"}`} key={o.id}>
@@ -2120,13 +2188,34 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
           </div>
           <label>
             Объект
-            <select value={objectId} onChange={(e) => setObjectId(e.target.value)}>
+            <select value={objectId} onChange={(e) => chooseObject(e.target.value)}>
               <option value="">Выберите объект…</option>
               {activeObjects.map((o) => (
                 <option key={o.id} value={o.id}>{o.number} — {o.name}</option>
               ))}
             </select>
           </label>
+          {retireAsk && (
+            <div className="wh-inline-confirm" style={{ flexWrap: "wrap" }}>
+              <span>
+                Номер {retireAsk.newObj.number} есть у двух объектов. Старый «{retireAsk.oldObj.name}» уже вышел из работы?
+              </span>
+              <button
+                type="button"
+                className="wh-btn-primary"
+                onClick={() => { onToggleObjectActive(retireAsk.oldObj.id); setRetireAsk(null); }}
+              >
+                Да, «{retireAsk.oldObj.name}» выбыл
+              </button>
+              <button
+                type="button"
+                className="wh-btn-ghost"
+                onClick={() => { setDupDismissed([...dupDismissed, `${retireAsk.oldObj.id}|${retireAsk.newObj.id}`]); setRetireAsk(null); }}
+              >
+                Нет, работают оба
+              </button>
+            </div>
+          )}
           <label>
             Количество{item ? `, ${item.unit}` : ""}
             <input type="number" min="1" value={qty} onChange={(e) => setQty(e.target.value)} />
@@ -2191,7 +2280,21 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
         {filteredLog.map((s) => (
           <div className={`wh-row wh-row-log ${s.cancelled ? "wh-row-cancelled" : ""}`} key={s.id}>
             <span className="wh-mono wh-muted">{fmtDate(s.date)}{s.by && <span className="wh-by-name">{s.by}</span>}</span>
-            <span className="wh-apt-badge" title={s.roomName}><BedDouble size={12} /> {s.roomNumber} · {s.roomName}</span>
+            {(() => {
+              const o = objects.find((x) => x.number === s.roomNumber && x.name === s.roomName);
+              const isOld = !!o && !o.active;
+              return (
+                <span
+                  className="wh-apt-badge"
+                  title={s.roomName}
+                  style={isOld ? { opacity: 0.55, filter: "grayscale(1)" } : undefined}
+                >
+                  <BedDouble size={12} />{" "}
+                  <i style={isOld ? undefined : { fontStyle: "normal" }}>{s.roomNumber}</i> · {s.roomName}
+                  {isOld && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>old</span>}
+                </span>
+              );
+            })()}
             <span className="wh-col-name">{s.itemName}</span>
             <span className="wh-mono">{num(s.qty)}</span>
             <span className="wh-mono wh-strong">{rub(s.cost)}</span>
@@ -3079,13 +3182,14 @@ const STAGE_PRESETS = [
   { name: "Напечатано → Отвезено → Установлено", text: "Напечатано, Отвезено, Установлено" },
 ];
 
-function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onAddNew }) {
+function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onAddNew, onExclude, onRestore }) {
   const [openId, setOpenId] = useState(null);
   const [newTitle, setNewTitle] = useState("");
   const [onlyOpen, setOnlyOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [stagesText, setStagesText] = useState(STAGE_PRESETS[0].text);
+  const [showExcluded, setShowExcluded] = useState(false);
 
   const list = checklists.find((c) => c.id === openId) || null;
   const objById = useMemo(() => Object.fromEntries(objects.map((o) => [o.id, o])), [objects]);
@@ -3155,7 +3259,7 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
         {checklists.map((c) => {
           const total = c.objectIds.length;
           const done = c.objectIds.filter((oid) => isDone(c, oid)).length;
-          const fresh = objects.filter((o) => o.active !== false && !c.objectIds.includes(o.id)).length;
+          const fresh = objects.filter((o) => o.active !== false && !c.objectIds.includes(o.id) && !(c.excluded || []).includes(o.id)).length;
           return (
             <button
               key={c.id}
@@ -3184,7 +3288,8 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
   }
 
   // ----- один чек-лист -----
-  const missing = sortObjs(objects.filter((o) => o.active !== false && !list.objectIds.includes(o.id)));
+  const missing = sortObjs(objects.filter((o) => o.active !== false && !list.objectIds.includes(o.id) && !(list.excluded || []).includes(o.id)));
+  const excludedObjs = sortObjs((list.excluded || []).map((id) => objById[id]).filter(Boolean));
   const inList = sortObjs(list.objectIds.map((id) => objById[id]).filter(Boolean));
   const total = inList.length;
   const done = inList.filter((o) => isDone(list, o.id)).length;
@@ -3274,9 +3379,20 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
         const full = isDone(list, o.id);
         return (
           <div key={o.id} className="wh-panel" style={{ marginBottom: 8, padding: 12, background: full ? "#EAFBF3" : undefined }}>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
-              {full ? "✅ " : ""}{o.number} · {o.name}
-              {o.active === false && <span style={{ color: "var(--muted)", fontWeight: 400 }}> (неактивен)</span>}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>
+                {full ? "✅ " : ""}{o.number} · {o.name}
+                {o.active === false && <span style={{ color: "var(--muted)", fontWeight: 400 }}> (неактивен)</span>}
+              </div>
+              <button
+                type="button"
+                title="Убрать объект из этого чек-листа"
+                aria-label="Убрать объект из этого чек-листа"
+                onClick={() => onExclude(list.id, o.id)}
+                style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 999, border: "none", background: "var(--line)", color: "var(--muted)", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+              >
+                <X size={15} />
+              </button>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {stages.map((st) => {
@@ -3308,6 +3424,20 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
           </div>
         );
       })}
+
+      {excludedObjs.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <button type="button" className="wh-btn-ghost" onClick={() => setShowExcluded((v) => !v)}>
+            {showExcluded ? "Скрыть" : "Показать"} убранные из списка ({excludedObjs.length})
+          </button>
+          {showExcluded && excludedObjs.map((o) => (
+            <div key={o.id} className="wh-panel" style={{ marginTop: 8, padding: 12, opacity: 0.8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 14 }}>{o.number} · {o.name}</span>
+              <button type="button" className="wh-btn-ghost" style={{ flexShrink: 0 }} onClick={() => onRestore(list.id, o.id)}>Вернуть</button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ marginTop: 16 }}>
         {!confirmDelete ? (
