@@ -698,7 +698,7 @@ export default function WarehouseApp() {
     setTab("catalog");
   };
 
-  const lowStockCount = items.filter((i) => i.quantity <= i.minQuantity).length;
+  const lowStockCount = items.filter((i) => !i.noRestock && i.quantity <= i.minQuantity).length;
   const totalValue = items.reduce((s, i) => s + i.quantity * i.unitCost, 0);
 
   if (!dataLoaded) {
@@ -897,14 +897,17 @@ export default function WarehouseApp() {
   // Редактирование карточки товара: только название/категория/единица/мин.
   // запас. Остаток и себестоимость этим путём не трогаем — они меняются
   // только через выдачу и приёмку партий, чтобы история расчётов не рвалась.
-  const FIELD_LABELS = { name: "Название", category: "Категория", unit: "Ед. изм.", minQuantity: "Мин. запас" };
+  const FIELD_LABELS = { name: "Название", category: "Категория", unit: "Ед. изм.", minQuantity: "Мин. запас", noRestock: "Не пополнять" };
   const editItem = (id, updates) => {
     const oldItem = items.find((i) => i.id === id);
     const newItems = items.map((i) => (i.id === id ? { ...i, ...updates } : i));
     setItems(newItems);
     const changes = Object.entries(updates)
-      .filter(([k, v]) => oldItem && oldItem[k] !== v)
-      .map(([k, v]) => `${FIELD_LABELS[k] || k}: «${oldItem[k]}» → «${v}»`)
+      .filter(([k, v]) => oldItem && (oldItem[k] ?? (typeof v === "boolean" ? false : undefined)) !== v)
+      .map(([k, v]) => {
+        const f = (x) => (typeof x === "boolean" ? (x ? "да" : "нет") : x === undefined ? "нет" : x);
+        return `${FIELD_LABELS[k] || k}: «${f(oldItem[k])}» → «${f(v)}»`;
+      })
       .join("; ");
     logChange("Изменена позиция каталога", `«${oldItem?.name}» — ${changes || "без изменений"}`, { items: newItems });
   };
@@ -1326,7 +1329,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
     const matchesQuery = (i.name + i.category).toLowerCase().includes(query.toLowerCase());
     const matchesFilter =
       stockFilter === "inStock" ? i.quantity > 0 :
-      stockFilter === "lowStock" ? i.quantity <= i.minQuantity :
+      stockFilter === "lowStock" ? (!i.noRestock && i.quantity <= i.minQuantity) :
       true;
     return matchesQuery && matchesFilter;
   });
@@ -1449,13 +1452,13 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
                   <span></span>
                 </div>
                 {list.map((item) => {
-                  const low = item.quantity <= item.minQuantity;
+                  const low = !item.noRestock && item.quantity <= item.minQuantity;
                   const itemOptions = purchaseOptions.filter((o) => o.itemId === item.id);
                   const linksOpen = linksForId === item.id;
                   return (
                     <React.Fragment key={item.id}>
                       <div className={`wh-row ${low ? "wh-row-low" : ""}`}>
-                        <span className={`wh-col-name wh-sticky-col ${low ? "wh-sticky-col-low" : ""}`}>{item.name}</span>
+                        <span className={`wh-col-name wh-sticky-col ${low ? "wh-sticky-col-low" : ""}`}>{item.name}{item.noRestock && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--muted)", fontWeight: 500 }}>не пополняем</span>}</span>
                         <span className="wh-qty-cell">
                           <button className="wh-qty-btn" onClick={() => onAdjust(item.id, -1)}>−</button>
                           <span className="wh-mono">
@@ -1905,6 +1908,7 @@ function EditItemForm({ item, onSave, onClose }) {
   const [category, setCategory] = useState(item.category);
   const [unit, setUnit] = useState(item.unit);
   const [minQuantity, setMinQuantity] = useState(String(item.minQuantity));
+  const [noRestock, setNoRestock] = useState(!!item.noRestock);
 
   const canSave = name.trim().length > 0;
 
@@ -1915,6 +1919,7 @@ function EditItemForm({ item, onSave, onClose }) {
       category,
       unit,
       minQuantity: Number(minQuantity) || 0,
+      noRestock,
     });
   };
 
@@ -1953,6 +1958,22 @@ function EditItemForm({ item, onSave, onClose }) {
           Мин. запас, {unit}
           <input type="number" min="0" value={minQuantity} onChange={(e) => setMinQuantity(e.target.value)} />
         </label>
+        <div className="wh-field-block">
+          <button
+            type="button"
+            onClick={() => setNoRestock((v) => !v)}
+            style={{
+              cursor: "pointer", padding: "10px 14px", borderRadius: 12, fontSize: 13.5, fontWeight: 600, textAlign: "left",
+              border: noRestock ? "1.5px solid var(--indigo)" : "1.5px solid var(--muted-2)",
+              background: noRestock ? "var(--indigo)" : "#fff", color: noRestock ? "#fff" : "var(--text)",
+            }}
+          >
+            {noRestock ? "✓ Не пополняем эту позицию" : "Не пополнять эту позицию"}
+          </button>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
+            Когда остаток закончится, позиция не будет считаться «нужно пополнить» и не попадёт в этот список. Включить обратно можно в любой момент.
+          </div>
+        </div>
       </div>
 
       <div className="wh-panel-actions">
@@ -2385,9 +2406,15 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
     setRestockQty("");
   };
 
-  const openAction = (assetId, mode) => {
+  // «Откуда» по умолчанию — первое место, где вещь реально лежит (склад, если
+  // там есть остаток). Раньше всегда ставился «warehouse», и если вещь была
+  // только на объекте, список показывал объект, а внутри оставался склад —
+  // из-за этого «Склад 1» пропадал из списка «Куда».
+  const openAction = (assetId, mode, locations = []) => {
+    const withStock = locations.map(([key]) => key);
+    const defaultFrom = withStock.includes("warehouse") ? "warehouse" : (withStock[0] || "warehouse");
     setActionFor({ id: assetId, mode });
-    setFromKey("warehouse");
+    setFromKey(defaultFrom);
     setToKey("");
     setMoveQty("");
     setMoveNote("");
@@ -2517,10 +2544,10 @@ function AssetsView({ assets, transfers, objects, warehouses, role, onAddAssetTy
                   )}
                   {canOperate && (
                     <>
-                      <button className="wh-btn-secondary" onClick={() => (isActing && !isWriteOff ? setActionFor(null) : openAction(asset.id, "transfer"))}>
+                      <button className="wh-btn-secondary" onClick={() => (isActing && !isWriteOff ? setActionFor(null) : openAction(asset.id, "transfer", locations))}>
                         <ArrowRightLeft size={14} /> Переместить
                       </button>
-                      <button className="wh-btn-writeoff" onClick={() => (isWriteOff ? setActionFor(null) : openAction(asset.id, "writeoff"))}>
+                      <button className="wh-btn-writeoff" onClick={() => (isWriteOff ? setActionFor(null) : openAction(asset.id, "writeoff", locations))}>
                         <Trash2 size={14} /> Списать
                       </button>
                     </>
