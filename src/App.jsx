@@ -676,6 +676,26 @@ export default function WarehouseApp() {
     return () => { cancelled = true; };
   }, []);
 
+  // Одноразовый перевод старых чек-листов (с этапом «Напечатано» по каждой
+  // квартире) на общий счётчик: сколько было отмечено «напечатано» — столько и
+  // записываем в счётчик, а по квартирам оставляем «Отвезено» и «Установлено».
+  useEffect(() => {
+    if (!dataLoaded) return;
+    if (!checklists.some((c) => !c.stages)) return;
+    const next = checklists.map((c) => {
+      if (c.stages) return c;
+      const printed = c.objectIds.filter((id) => c.marks?.[id]?.printed).length;
+      return {
+        ...c,
+        stockLabel: "Напечатано",
+        produced: printed,
+        stages: [{ key: "installed", label: "Установлено" }],
+      };
+    });
+    setChecklists(next);
+    saveState({ checklists: next });
+  }, [dataLoaded, checklists]);
+
   const allowedTabs = role ? ROLES[role].tabs : [];
 
   const logIn = (nextRole, name) => {
@@ -956,12 +976,14 @@ export default function WarehouseApp() {
   // Чек-лист строится из активных объектов на момент создания. Объекты,
   // появившиеся позже, в него сами не попадают — их приложение подсвечивает
   // и предлагает добавить одной кнопкой.
-  const createChecklist = (title, stageLabels) => {
+  const createChecklist = (title, stageLabels, stockLabel = "") => {
     const t = title.trim();
     if (!t) return null;
     const list = {
       id: nextId("cl"), title: t, createdAt: nowStamp(), createdBy: userName,
       stages: stageLabels.map((label, i) => ({ key: `s${i}`, label })),
+      stockLabel: stockLabel.trim(),
+      produced: 0,
       objectIds: objects.filter((o) => o.active !== false).map((o) => o.id),
       marks: {},
     };
@@ -976,6 +998,14 @@ export default function WarehouseApp() {
     const next = checklists.filter((c) => c.id !== id);
     setChecklists(next);
     logChange("Удалён чек-лист", `«${list?.title || id}»`, { checklists: next });
+  };
+
+  // Общий счётчик «сколько уже напечатано/куплено» — не привязан к квартирам.
+  const setChecklistProduced = (listId, value) => {
+    const n = Math.max(0, Math.floor(Number(value) || 0));
+    const next = checklists.map((c) => (c.id === listId ? { ...c, produced: n } : c));
+    setChecklists(next);
+    saveState({ checklists: next });
   };
 
   const toggleChecklistMark = (listId, objectId, stage) => {
@@ -1185,6 +1215,7 @@ export default function WarehouseApp() {
               onCreate={createChecklist}
               onDelete={deleteChecklist}
               onToggle={toggleChecklistMark}
+              onSetProduced={setChecklistProduced}
               onAddNew={addNewObjectsToChecklist}
               onExclude={excludeFromChecklist}
               onRestore={restoreToChecklist}
@@ -3204,18 +3235,19 @@ const CHECK_STAGES = [
 const stagesOf = (c) => (c && c.stages && c.stages.length ? c.stages : CHECK_STAGES);
 
 const STAGE_PRESETS = [
-  { name: "Отвезено → Установлено", text: "Отвезено, Установлено" },
-  { name: "Куплено → Отвезено → Установлено", text: "Куплено, Отвезено, Установлено" },
-  { name: "Напечатано → Отвезено → Установлено", text: "Напечатано, Отвезено, Установлено" },
+  { name: "Напечатано (общее) + Установлено по квартирам", stock: "Напечатано", text: "Установлено" },
+  { name: "Куплено (общее) + Установлено по квартирам", stock: "Куплено", text: "Установлено" },
+  { name: "Только отметка по квартирам", stock: "", text: "Установлено" },
 ];
 
-function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onAddNew, onExclude, onRestore }) {
+function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onSetProduced, onAddNew, onExclude, onRestore }) {
   const [openId, setOpenId] = useState(null);
   const [newTitle, setNewTitle] = useState("");
   const [onlyOpen, setOnlyOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [stagesText, setStagesText] = useState(STAGE_PRESETS[0].text);
+  const [stockText, setStockText] = useState(STAGE_PRESETS[0].stock);
   const [showExcluded, setShowExcluded] = useState(false);
 
   const list = checklists.find((c) => c.id === openId) || null;
@@ -3231,7 +3263,7 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
   const create = () => {
     const labels = stagesText.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 5);
     if (labels.length === 0) return;
-    const id = onCreate(newTitle, labels);
+    const id = onCreate(newTitle, labels, stockText);
     if (id) { setNewTitle(""); setOpenId(id); }
   };
 
@@ -3242,7 +3274,7 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
         <div className="wh-panel" style={{ marginBottom: 14 }}>
           <h2 style={{ margin: "0 0 4px", fontSize: 17 }}>Чек-листы по объектам</h2>
           <p style={{ margin: "0 0 12px", color: "var(--muted)", fontSize: 13 }}>
-            Для разовых поставок в квартиры: баночки для чая, рамки с инструкциями, тапочки и т.п. Список объектов подставится сам, этапы вы выбираете сами.
+            Для разовых поставок в квартиры: баночки для чая, рамки, тапочки и т.п. Список объектов подставится сам. «Напечатано/куплено» ведётся общим числом, а по квартирам отмечается только «Установлено».
           </p>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <input
@@ -3253,14 +3285,14 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") create(); }}
             />
-            <div style={{ fontSize: 12.5, color: "var(--muted)" }}>Что нужно отмечать по каждому объекту (этапы):</div>
+            <div style={{ fontSize: 12.5, color: "var(--muted)" }}>Как вести чек-лист:</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {STAGE_PRESETS.map((pr) => (
                 <button
                   key={pr.text}
                   type="button"
-                  onClick={() => setStagesText(pr.text)}
-                  style={{ flexShrink: 0, whiteSpace: "nowrap", cursor: "pointer", padding: "7px 12px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, border: "none", background: stagesText === pr.text ? "var(--indigo)" : "#fff", color: stagesText === pr.text ? "#fff" : "var(--text)" }}
+                  onClick={() => { setStagesText(pr.text); setStockText(pr.stock); }}
+                  style={{ flexShrink: 0, whiteSpace: "nowrap", cursor: "pointer", padding: "7px 12px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, border: "none", background: stagesText === pr.text && stockText === pr.stock ? "var(--indigo)" : "#fff", color: stagesText === pr.text && stockText === pr.stock ? "#fff" : "var(--text)" }}
                 >
                   {pr.name}
                 </button>
@@ -3269,7 +3301,14 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
             <input
               className="wh-search"
               style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px" }}
-              placeholder="Свои этапы через запятую, например: Куплено, Установлено"
+              placeholder="Общий счётчик (необязательно): Напечатано, Куплено…"
+              value={stockText}
+              onChange={(e) => setStockText(e.target.value)}
+            />
+            <input
+              className="wh-search"
+              style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px" }}
+              placeholder="Этапы по каждой квартире через запятую, например: Отвезено, Установлено"
               value={stagesText}
               onChange={(e) => setStagesText(e.target.value)}
             />
@@ -3340,7 +3379,18 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
       return row;
     });
     missing.forEach((o) => rows.push({ "№": o.number, "Объект": o.name, "Статус": "НОВЫЙ — не добавлен в чек-лист" }));
-    downloadWorkbook([{ name: "Чек-лист", rows }], `chek-list-${todayISO()}.xlsx`);
+    const sheets = [{ name: "Чек-лист", rows }];
+    if (list.stockLabel) {
+      sheets.push({
+        name: "Итого",
+        rows: [{
+          [`${list.stockLabel} всего`]: list.produced || 0,
+          [stages[0]?.label || "Установлено"]: stageCount(stages[0]?.key),
+          "Осталось на руках": (list.produced || 0) - stageCount(stages[0]?.key),
+        }],
+      });
+    }
+    downloadWorkbook(sheets, `chek-list-${todayISO()}.xlsx`);
   };
 
   return (
@@ -3365,6 +3415,31 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onA
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8, fontSize: 12.5, color: "var(--muted)" }}>
           {stages.map((st) => (<span key={st.key}>{st.label}: <b>{stageCount(st.key)}</b></span>))}
         </div>
+        {list.stockLabel && (() => {
+          const produced = list.produced || 0;
+          const out = stages.length ? stageCount(stages[0].key) : 0;
+          const left = produced - out;
+          return (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{list.stockLabel} всего:</span>
+                <button type="button" aria-label="Меньше" onClick={() => onSetProduced(list.id, produced - 1)} style={{ flexShrink: 0, width: 34, height: 34, borderRadius: 999, border: "none", background: "var(--line)", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>−</button>
+                <input
+                  type="number"
+                  min="0"
+                  value={produced}
+                  onChange={(e) => onSetProduced(list.id, e.target.value)}
+                  style={{ width: 70, textAlign: "center", padding: "8px 6px", borderRadius: 10, border: "1.5px solid var(--muted-2)", fontSize: 15, fontWeight: 700 }}
+                />
+                <button type="button" aria-label="Больше" onClick={() => onSetProduced(list.id, produced + 1)} style={{ flexShrink: 0, width: 34, height: 34, borderRadius: 999, border: "none", background: "var(--indigo)", color: "#fff", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>+</button>
+              </div>
+              <div style={{ marginTop: 8, fontSize: 13, color: left < 0 ? "var(--neg)" : "var(--muted)" }}>
+                {stages[0]?.label || "Установлено"}: <b>{out}</b> · Осталось на руках: <b>{left}</b>
+                {left < 0 && " — установлено больше, чем указано в счётчике, поправьте число выше"}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {missing.length > 0 && (
