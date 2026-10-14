@@ -737,6 +737,54 @@ export default function WarehouseApp() {
     return <LoginGate onLogIn={logIn} />;
   }
 
+  // Связь выдачи и чек-листов: если чек-лист привязан к позиции каталога
+  // (itemId), то выдача этой позиции на объект сама ставит в нём последнюю
+  // отметку («Установлено»), а отмена выдачи её снимает (только автоматическую).
+  const findObjectForIssue = (issue) =>
+    objects.find((o) => o.number === issue.roomNumber && o.name === issue.roomName) ||
+    objects.find((o) => o.active && o.number === issue.roomNumber);
+
+  const syncChecklistsOnIssue = (issue) => {
+    const obj = findObjectForIssue(issue);
+    if (!obj) return null;
+    let changed = false;
+    const next = checklists.map((c) => {
+      if (c.itemId !== issue.itemId || (c.excluded || []).includes(obj.id)) return c;
+      const stages = c.stages && c.stages.length ? c.stages : CHECK_STAGES;
+      const key = stages[stages.length - 1].key;
+      if (c.marks?.[obj.id]?.[key]) return c;
+      changed = true;
+      return {
+        ...c,
+        objectIds: c.objectIds.includes(obj.id) ? c.objectIds : [...c.objectIds, obj.id],
+        marks: { ...c.marks, [obj.id]: { ...(c.marks?.[obj.id] || {}), [key]: { by: userName, at: nowStamp(), auto: true } } },
+      };
+    });
+    return changed ? next : null;
+  };
+
+  const syncChecklistsOnCancel = (issue, issuesAfter) => {
+    const obj = findObjectForIssue(issue);
+    if (!obj) return null;
+    const stillHas = issuesAfter.some(
+      (s) => !s.cancelled && s.itemId === issue.itemId && s.roomNumber === issue.roomNumber && s.roomName === issue.roomName
+    );
+    if (stillHas) return null;
+    let changed = false;
+    const next = checklists.map((c) => {
+      if (c.itemId !== issue.itemId) return c;
+      const stages = c.stages && c.stages.length ? c.stages : CHECK_STAGES;
+      const key = stages[stages.length - 1].key;
+      const mark = c.marks?.[obj.id]?.[key];
+      if (!mark || !mark.auto) return c;
+      changed = true;
+      const rest = { ...c.marks[obj.id] };
+      delete rest[key];
+      return { ...c, marks: { ...c.marks, [obj.id]: rest } };
+    });
+    return changed ? next : null;
+  };
+
   const issueItem = (itemId, roomNumber, roomName, qty, note) => {
     const item = items.find((i) => i.id === itemId);
     if (!item) return;
@@ -757,7 +805,9 @@ export default function WarehouseApp() {
     const newIssues = [newIssue, ...issues];
     setItems(newItems);
     setIssues(newIssues);
-    saveState({ items: newItems, issues: newIssues });
+    const newLists = syncChecklistsOnIssue(newIssue);
+    if (newLists) setChecklists(newLists);
+    saveState({ items: newItems, issues: newIssues, ...(newLists ? { checklists: newLists } : {}) });
   };
 
   // Отмена ошибочной выдачи: количество возвращается на остаток позиции,
@@ -775,7 +825,9 @@ export default function WarehouseApp() {
     );
     setItems(newItems);
     setIssues(newIssues);
-    saveState({ items: newItems, issues: newIssues });
+    const newLists = syncChecklistsOnCancel(issue, newIssues);
+    if (newLists) setChecklists(newLists);
+    saveState({ items: newItems, issues: newIssues, ...(newLists ? { checklists: newLists } : {}) });
   };
 
   // Оприходовать партию для уже существующей позиции: количество и себестоимость
@@ -976,7 +1028,7 @@ export default function WarehouseApp() {
   // Чек-лист строится из активных объектов на момент создания. Объекты,
   // появившиеся позже, в него сами не попадают — их приложение подсвечивает
   // и предлагает добавить одной кнопкой.
-  const createChecklist = (title, stageLabels, stockLabel = "") => {
+  const createChecklist = (title, stageLabels, stockLabel = "", itemId = "") => {
     const t = title.trim();
     if (!t) return null;
     const list = {
@@ -984,6 +1036,7 @@ export default function WarehouseApp() {
       stages: stageLabels.map((label, i) => ({ key: `s${i}`, label })),
       stockLabel: stockLabel.trim(),
       produced: 0,
+      itemId: itemId || "",
       objectIds: objects.filter((o) => o.active !== false).map((o) => o.id),
       marks: {},
     };
@@ -1004,6 +1057,12 @@ export default function WarehouseApp() {
   const setChecklistProduced = (listId, value) => {
     const n = Math.max(0, Math.floor(Number(value) || 0));
     const next = checklists.map((c) => (c.id === listId ? { ...c, produced: n } : c));
+    setChecklists(next);
+    saveState({ checklists: next });
+  };
+
+  const linkChecklistItem = (listId, itemId) => {
+    const next = checklists.map((c) => (c.id === listId ? { ...c, itemId: itemId || "" } : c));
     setChecklists(next);
     saveState({ checklists: next });
   };
@@ -1216,6 +1275,8 @@ export default function WarehouseApp() {
               onDelete={deleteChecklist}
               onToggle={toggleChecklistMark}
               onSetProduced={setChecklistProduced}
+              onLinkItem={linkChecklistItem}
+              items={items}
               onAddNew={addNewObjectsToChecklist}
               onExclude={excludeFromChecklist}
               onRestore={restoreToChecklist}
@@ -3240,7 +3301,7 @@ const STAGE_PRESETS = [
   { name: "Только отметка по квартирам", stock: "", text: "Установлено" },
 ];
 
-function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onSetProduced, onAddNew, onExclude, onRestore }) {
+function ChecklistsView({ checklists, items = [], objects, onCreate, onDelete, onToggle, onSetProduced, onLinkItem, onAddNew, onExclude, onRestore }) {
   const [openId, setOpenId] = useState(null);
   const [newTitle, setNewTitle] = useState("");
   const [onlyOpen, setOnlyOpen] = useState(false);
@@ -3249,6 +3310,8 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onS
   const [stagesText, setStagesText] = useState(STAGE_PRESETS[0].text);
   const [stockText, setStockText] = useState(STAGE_PRESETS[0].stock);
   const [showExcluded, setShowExcluded] = useState(false);
+  const [newItemId, setNewItemId] = useState("");
+  const itemOptions = [...items].sort((a, b) => (a.category === "3D" ? 0 : 1) - (b.category === "3D" ? 0 : 1) || a.name.localeCompare(b.name, "ru"));
 
   const list = checklists.find((c) => c.id === openId) || null;
   const objById = useMemo(() => Object.fromEntries(objects.map((o) => [o.id, o])), [objects]);
@@ -3263,8 +3326,8 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onS
   const create = () => {
     const labels = stagesText.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 5);
     if (labels.length === 0) return;
-    const id = onCreate(newTitle, labels, stockText);
-    if (id) { setNewTitle(""); setOpenId(id); }
+    const id = onCreate(newTitle, labels, stockText, newItemId);
+    if (id) { setNewTitle(""); setNewItemId(""); setOpenId(id); }
   };
 
   // ----- список чек-листов -----
@@ -3312,6 +3375,17 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onS
               value={stagesText}
               onChange={(e) => setStagesText(e.target.value)}
             />
+            <div style={{ fontSize: 12.5, color: "var(--muted)" }}>
+              Связать с позицией каталога (необязательно): когда вы выдадите её на объект, квартира в чек-листе отметится сама.
+            </div>
+            <select
+              value={newItemId}
+              onChange={(e) => setNewItemId(e.target.value)}
+              style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px", borderRadius: 12, border: "1.5px solid var(--muted-2)", background: "#fff", fontSize: 14 }}
+            >
+              <option value="">Не связывать — отмечать вручную</option>
+              {itemOptions.map((it) => (<option key={it.id} value={it.id}>{it.name}{it.category === "3D" ? " (3D)" : ""}</option>))}
+            </select>
             <button type="button" className="wh-btn-primary" style={{ justifyContent: "center" }} onClick={create} disabled={!newTitle.trim() || !stagesText.trim()}>
               <Plus size={15} /> Создать чек-лист
             </button>
@@ -3442,6 +3516,20 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onS
         })()}
       </div>
 
+      <div className="wh-panel" style={{ marginBottom: 12, padding: 12 }}>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 6 }}>
+          Связано с позицией каталога — выдача её на объект сама ставит «{stages[stages.length - 1]?.label}»:
+        </div>
+        <select
+          value={list.itemId || ""}
+          onChange={(e) => onLinkItem(list.id, e.target.value)}
+          style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 12, border: "1.5px solid var(--muted-2)", background: "#fff", fontSize: 14 }}
+        >
+          <option value="">Не связано — отмечаю вручную</option>
+          {itemOptions.map((it) => (<option key={it.id} value={it.id}>{it.name}{it.category === "3D" ? " (3D)" : ""}</option>))}
+        </select>
+      </div>
+
       {missing.length > 0 && (
         <div style={{ background: "#FFF4DC", border: "2px solid #F5A524", borderRadius: 14, padding: 14, marginBottom: 12 }}>
           <div style={{ fontWeight: 700, color: "#8A5200", marginBottom: 6 }}>
@@ -3520,7 +3608,7 @@ function ChecklistsView({ checklists, objects, onCreate, onDelete, onToggle, onS
             </div>
             {stages.some((st) => m[st.key]) && (
               <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)", lineHeight: 1.5 }}>
-                {stages.filter((st) => m[st.key]).map((st) => `${st.label}: ${m[st.key].by || "—"}, ${fmtDateTime(m[st.key].at)}`).join(" · ")}
+                {stages.filter((st) => m[st.key]).map((st) => `${st.label}: ${m[st.key].by || "—"}, ${fmtDateTime(m[st.key].at)}${m[st.key].auto ? " (из выдачи)" : ""}`).join(" · ")}
               </div>
             )}
           </div>
