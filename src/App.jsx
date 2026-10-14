@@ -1245,6 +1245,7 @@ export default function WarehouseApp() {
               items={items}
               issues={issues}
               objects={objects}
+              checklists={checklists}
               role={role}
               onIssue={issueItem}
               onAddObject={addObject}
@@ -2079,7 +2080,65 @@ function EditItemForm({ item, onSave, onClose }) {
 
 // ---------- Issue ----------
 
-function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggleObjectActive, onClearIssues, onCancelIssue }) {
+// ---------- проверка выдач на аномалии ----------
+// Повторная выдача одной и той же позиции на один и тот же объект считается
+// подозрительной: для разовых вещей (категория «3D» или позиция, привязанная
+// к чек-листу) — всегда, для обычных расходников — если повтор в течение 7 дней.
+// Второй вид аномалий — необычно большое количество (в 3+ раза выше обычного
+// для этой позиции, когда выдач уже не меньше пяти).
+const daysBetween = (a, b) => Math.abs(new Date(a + "T00:00:00") - new Date(b + "T00:00:00")) / 86400000;
+
+const dupWindowDays = (item, checklists = []) =>
+  item && (item.category === "3D" || checklists.some((c) => c.itemId === item.id)) ? Infinity : 7;
+
+const findAnomalies = (issues, items, checklists = []) => {
+  const live = issues.filter((s) => !s.cancelled);
+  const result = [];
+  const groups = new Map();
+  live.forEach((s) => {
+    const k = `${s.itemId}|${s.roomNumber}|${s.roomName}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  });
+  groups.forEach((list) => {
+    if (list.length < 2) return;
+    const item = items.find((i) => i.id === list[0].itemId);
+    const win = dupWindowDays(item, checklists);
+    const sorted = [...list].sort((a, b) => a.date.localeCompare(b.date));
+    const close = sorted.filter((s, i) => (i > 0 && daysBetween(s.date, sorted[i - 1].date) <= win) || (i < sorted.length - 1 && daysBetween(s.date, sorted[i + 1].date) <= win));
+    if (close.length < 2) return;
+    result.push({
+      id: `dup-${list[0].id}`,
+      kind: "dup",
+      date: sorted[sorted.length - 1].date,
+      text: `«${item?.name || "—"}» выдано на ${list[0].roomNumber} · ${list[0].roomName} уже ${close.length} раза: ${close.map((x) => fmtDate(x.date)).join(", ")}`,
+    });
+  });
+  const byItem = new Map();
+  live.forEach((s) => {
+    if (!byItem.has(s.itemId)) byItem.set(s.itemId, []);
+    byItem.get(s.itemId).push(s);
+  });
+  byItem.forEach((list, itemId) => {
+    if (list.length < 5) return;
+    const qs = list.map((x) => x.qty).sort((a, b) => a - b);
+    const median = qs[Math.floor(qs.length / 2)];
+    const item = items.find((i) => i.id === itemId);
+    list.forEach((x) => {
+      if (median > 0 && x.qty >= median * 3 && x.qty - median >= 2) {
+        result.push({
+          id: `big-${x.id}`,
+          kind: "big",
+          date: x.date,
+          text: `«${item?.name || "—"}»: ${num(x.qty)} шт на ${x.roomNumber} · ${x.roomName} (${fmtDate(x.date)}) — обычно около ${num(median)}`,
+        });
+      }
+    });
+  });
+  return result.sort((a, b) => b.date.localeCompare(a.date));
+};
+
+function IssueView({ items, issues, objects, checklists = [], role, onIssue, onAddObject, onToggleObjectActive, onClearIssues, onCancelIssue }) {
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [objectId, setObjectId] = useState("");
   const [retireAsk, setRetireAsk] = useState(null); // { oldObj, newObj } — вопрос «старый объект выбыл?» при выборе в выдаче
@@ -2129,6 +2188,24 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
   const qtyNum = Number(qty) || 0;
   const overStock = item && qtyNum > item.quantity;
   const canSubmit = item && selectedObject && qtyNum > 0 && !overStock;
+
+  // Предупреждения (не запрещают выдачу): повторная выдача и уже отмеченная квартира.
+  const repeatIssues = item && selectedObject
+    ? issues.filter((s) => {
+        if (s.cancelled || s.itemId !== item.id) return false;
+        if (s.roomNumber !== selectedObject.number || s.roomName !== selectedObject.name) return false;
+        return daysBetween(s.date, todayISO()) <= dupWindowDays(item, checklists);
+      })
+    : [];
+  const alreadyInChecklists = item && selectedObject
+    ? checklists.filter((c) => {
+        if (c.itemId !== item.id) return false;
+        const st = c.stages && c.stages.length ? c.stages : CHECK_STAGES;
+        return !!c.marks?.[selectedObject.id]?.[st[st.length - 1].key];
+      })
+    : [];
+  const anomalies = findAnomalies(issues, items, checklists);
+  const [showAnomalies, setShowAnomalies] = useState(false);
 
   const submit = () => {
     if (!canSubmit) return;
@@ -2339,6 +2416,19 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
           </label>
         </div>
 
+        {(repeatIssues.length > 0 || alreadyInChecklists.length > 0) && (
+          <div style={{ background: "#FFF4DC", border: "1.5px solid #F5A524", borderRadius: 12, padding: "10px 12px", margin: "10px 0", color: "#8A5200", fontSize: 13, lineHeight: 1.5 }}>
+            <div style={{ fontWeight: 700 }}>⚠️ Похоже на повторную выдачу</div>
+            {repeatIssues.length > 0 && (
+              <div>«{item.name}» уже выдавали на {selectedObject.number} · {selectedObject.name}: {repeatIssues.slice(0, 3).map((x) => `${fmtDate(x.date)} (${num(x.qty)})`).join(", ")}.</div>
+            )}
+            {alreadyInChecklists.map((c) => (
+              <div key={c.id}>В чек-листе «{c.title}» эта квартира уже отмечена.</div>
+            ))}
+            <div>Если так и должно быть — просто выдайте дальше.</div>
+          </div>
+        )}
+
         {overStock && (
           <div className="wh-warning-line">
             <AlertTriangle size={14} /> На складе только {fmtQty(item.quantity, item.unit)} — уменьшите количество
@@ -2358,6 +2448,30 @@ function IssueView({ items, issues, objects, role, onIssue, onAddObject, onToggl
           </button>
         </div>
       </div>
+
+      {anomalies.length > 0 && (
+        <div style={{ background: "#FFF4DC", border: "1.5px solid #F5A524", borderRadius: 14, padding: 12, marginBottom: 14 }}>
+          <button
+            type="button"
+            onClick={() => setShowAnomalies((v) => !v)}
+            style={{ border: "none", background: "transparent", cursor: "pointer", fontWeight: 700, fontSize: 14, color: "#8A5200", padding: 0, textAlign: "left" }}
+          >
+            ⚠️ Подозрительные выдачи: {anomalies.length} {showAnomalies ? "— скрыть" : "— показать"}
+          </button>
+          {showAnomalies && (
+            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+              {anomalies.slice(0, 30).map((a) => (
+                <div key={a.id} style={{ fontSize: 13, color: "#6B4200", lineHeight: 1.45 }}>
+                  {a.kind === "dup" ? "🔁 " : "📈 "}{a.text}
+                </div>
+              ))}
+              <div style={{ fontSize: 11.5, color: "#8A5200" }}>
+                Это только подсказки: если повтор нормальный, ничего делать не нужно. Ошибочную выдачу можно отменить в журнале ниже.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="wh-log-header">
         <h2>📜 Журнал выдач</h2>
