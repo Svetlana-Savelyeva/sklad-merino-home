@@ -554,6 +554,23 @@ export default function WarehouseApp() {
     }
   }, []);
 
+  // Масштаб на телефоне: запрещаем автоувеличение страницы (iPhone увеличивает
+  // страницу при нажатии на поле ввода и потом не возвращает масштаб) и
+  // включаем viewport-fit=cover для нормальных отступов под вырезом экрана.
+  useEffect(() => {
+    try {
+      let meta = document.querySelector("meta[name='viewport']");
+      if (!meta) {
+        meta = document.createElement("meta");
+        meta.name = "viewport";
+        document.head.appendChild(meta);
+      }
+      meta.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover");
+    } catch {
+      // нет доступа к document — пропускаем
+    }
+  }, []);
+
   // Иконка приложения — favicon вкладки браузера и заголовок страницы.
   // Выполняется один раз при монтировании; безопасно (просто ничего не
   // сделает), если компонент рендерится вне обычного document (например,
@@ -2542,14 +2559,13 @@ function IssueView({ items, issues, objects, checklists = [], role, onIssue, onA
               const o = objects.find((x) => x.number === s.roomNumber && x.name === s.roomName);
               const isOld = !!o && !o.active;
               return (
-                <span
-                  className="wh-apt-badge"
-                  title={s.roomName}
-                  style={isOld ? { opacity: 0.55, filter: "grayscale(1)" } : undefined}
-                >
-                  <BedDouble size={12} />{" "}
-                  <i style={isOld ? undefined : { fontStyle: "normal" }}>{s.roomNumber}</i> · {s.roomName}
-                  {isOld && <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 }}>old</span>}
+                <span className={`wh-obj-cell ${isOld ? "wh-obj-old" : ""}`} title={s.roomName}>
+                  <span className="wh-apt-badge">
+                    <BedDouble size={12} />
+                    <span className="wh-obj-num">{s.roomNumber}</span>
+                    {isOld && <span className="wh-old-tag">old</span>}
+                  </span>
+                  <span className="wh-obj-name">{s.roomName}</span>
                 </span>
               );
             })()}
@@ -3214,10 +3230,10 @@ function ReportView({ items, issues, role, markupRate, onMarkupChange }) {
                         <div className="wh-room-detail-row" key={line.id}>
                           <span className="wh-mono wh-muted">{fmtDate(line.date)}</span>
                           <span className="wh-col-name">{itemName}</span>
-                          <span className="wh-mono">{num(line.qty)}</span>
-                          <span className="wh-mono">{rub(line.cost)}</span>
-                          <span className="wh-mono wh-muted">{rub(logistics)}</span>
-                          <span className="wh-mono wh-strong">{rub(line.cost + logistics)}</span>
+                          <span className="wh-mono" data-label="Кол-во">{num(line.qty)}</span>
+                          <span className="wh-mono" data-label="Себест.">{rub(line.cost)}</span>
+                          <span className="wh-mono wh-muted" data-label="Логистика">{rub(logistics)}</span>
+                          <span className="wh-mono wh-strong" data-label="Итого">{rub(line.cost + logistics)}</span>
                         </div>
                       );
                     })}
@@ -3852,6 +3868,7 @@ const CSS = `
    этого поведения (hidden в некоторых версиях Safari всё равно позволяет
    внутреннему широкому элементу повлиять на начальный масштаб страницы). */
 html, body, #root {
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
   margin: 0;
   min-height: 100%;
   width: 100%;
@@ -4151,7 +4168,15 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
 }
 .wh-row-head .wh-sticky-col { background: #F8F9FC; }
 .wh-sticky-col-low { background: #FDF1EF; }
-.wh-row-log { grid-template-columns: 92px 96px 1.6fr 70px 90px 1.6fr 100px; min-width: 660px; }
+.wh-row-log { grid-template-columns: 92px 150px 1.6fr 60px 90px 1.6fr 100px; min-width: 780px; }
+.wh-row-log .wh-col-name:not(.wh-muted) { white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+.wh-obj-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+.wh-obj-name { font-size: 11.5px; color: var(--muted); font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.wh-obj-old { opacity: .6; }
+.wh-obj-old .wh-apt-badge { background: #ECEEF3; color: #7C8599; }
+.wh-obj-old .wh-obj-num { font-style: italic; }
+.wh-obj-old .wh-obj-name { font-style: italic; }
+.wh-old-tag { margin-left: 4px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
 .wh-row-cancelled { opacity: .55; text-decoration: line-through; }
 .wh-row-cancelled .wh-apt-badge, .wh-row-cancelled .wh-cancelled-badge { text-decoration: none; }
 .wh-cancelled-badge {
@@ -4411,5 +4436,29 @@ h2 { font-family: 'Poppins', sans-serif; font-size: 15px; font-weight: 600; marg
   }
   .wh-material-menu-header { margin-bottom: 12px; }
   .wh-material-close { padding: 11px 14px; }
+
+  /* 16px в полях ввода — иначе iPhone при нажатии увеличивает страницу и
+     потом не возвращает масштаб. */
+  .wh-root input, .wh-root select, .wh-root textarea { font-size: 16px !important; }
+
+  /* Детализация расходов по объекту: вместо узкой таблицы — аккуратные
+     карточки, чтобы ничего не обрезалось справа. */
+  .wh-room-detail { padding: 4px 0 10px 0; gap: 0; }
+  .wh-room-detail-head { display: none; }
+  .wh-room-detail-row {
+    grid-template-columns: repeat(4, 1fr); column-gap: 8px; row-gap: 6px;
+    padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12.5px;
+  }
+  .wh-room-detail-row:last-child { border-bottom: none; }
+  .wh-room-detail-row > span:nth-child(1) { grid-column: 1 / 2; }
+  .wh-room-detail-row > span:nth-child(2) {
+    grid-column: 2 / 5; white-space: normal; overflow: visible; text-overflow: clip;
+    font-weight: 600; font-size: 13px; overflow-wrap: anywhere;
+  }
+  .wh-room-detail-row > span[data-label]::before {
+    content: attr(data-label); display: block; font-family: 'Inter', sans-serif;
+    font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em;
+    color: var(--muted); margin-bottom: 1px;
+  }
 }
 `;
