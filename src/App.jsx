@@ -2176,13 +2176,22 @@ const findAnomalies = (issues, items, checklists = []) => {
   return result.sort((a, b) => b.date.localeCompare(a.date));
 };
 
+const defaultIssueQuantity = (item) => {
+  const name = item?.name?.trim().toLowerCase();
+  const code = item?.code?.trim().toUpperCase();
+  if (code === "СК-001" || name === "туалетная бумага") return "8";
+  if (code === "КХ-003" || /^(губка|губки) для (мытья )?посуды$/.test(name ?? "")) return "6";
+  if (code === "ПР-009" || /^печенье\s+pekarro\b/.test(name ?? "")) return "10";
+  return "1";
+};
+
 function IssueView({ items, issues, objects, checklists = [], role, onIssue, onAddObject, onToggleObjectActive, onClearIssues, onCancelIssue }) {
   const [itemId, setItemId] = useState(items[0]?.id || "");
   const [objectId, setObjectId] = useState("");
   const [retireAsk, setRetireAsk] = useState(null); // { oldObj, newObj } — вопрос «старый объект выбыл?» при выборе в выдаче
   const [addAsk, setAddAsk] = useState(null); // { oldObj } — вопрос при добавлении объекта с уже занятым номером
   const [dupDismissed, setDupDismissed] = useState([]);
-  const [qty, setQty] = useState("1");
+  const [qty, setQty] = useState(() => defaultIssueQuantity(items[0]));
   const [note, setNote] = useState("");
   const [filter, setFilter] = useState("");
   const [showObjects, setShowObjects] = useState(false);
@@ -2256,7 +2265,7 @@ function IssueView({ items, issues, objects, checklists = [], role, onIssue, onA
     // Чтобы предупреждение о повторе не срабатывало на только что сделанную
     // выдачу, запоминаем её и показываем вместо предупреждения зелёную отметку.
     setJustIssued({ itemId, objectId, text: `${item.name} → ${selectedObject.number} · ${selectedObject.name}` });
-    setQty("1");
+    setQty(defaultIssueQuantity(item));
     setNote("");
   };
 
@@ -2406,7 +2415,11 @@ function IssueView({ items, issues, objects, checklists = [], role, onIssue, onA
                               key={i.id}
                               disabled={i.quantity === 0}
                               className={`wh-material-option ${i.id === itemId ? "selected" : ""}`}
-                              onClick={() => { setItemId(i.id); closeMaterialMenu(); }}
+                              onClick={() => {
+                                setItemId(i.id);
+                                if (i.id !== itemId) setQty(defaultIssueQuantity(i));
+                                closeMaterialMenu();
+                              }}
                             >
                               <span className="wh-col-name">{i.name}</span>
                               <span className="wh-mono wh-muted">
