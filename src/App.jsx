@@ -41,7 +41,11 @@ const CATEGORY_EMOJI = {
   "Хозяйственные расходники": "🧹",
   "Средства для уборки": "🧴",
   "3D": "🖨️",
+  "Промо": "📣",
+  "Другое": "📦",
 };
+
+const categoryLabel = (category) => `${CATEGORY_EMOJI[category] || "📦"} ${category}`;
 
 const seedItems = [
   // Продукты — соль, сахар и перец выдаются целой закупленной упаковкой,
@@ -1563,7 +1567,7 @@ function CatalogView({ items, issues, receipts, objects, onRemove, onAdjust, onE
               onClick={() => setCollapsed((c) => ({ ...c, [cat]: !c[cat] }))}
             >
               {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-              <span className="wh-cat-name">{CATEGORY_EMOJI[cat] || "📦"} {cat}</span>
+              <span className="wh-cat-name">{categoryLabel(cat)}</span>
               <span className="wh-cat-count">{list.length}</span>
               <span className="wh-cat-value">{rub(catValue)}</span>
             </button>
@@ -1906,7 +1910,7 @@ function ReceiveForm({ items, receipts = [], purchaseOptions = [], initialMode =
                       {materialGroups.length === 0 && <div className="wh-empty">Ничего не найдено</div>}
                       {materialGroups.map(([cat, list]) => (
                         <div key={cat}>
-                          <div className="wh-material-group-label">{CATEGORY_EMOJI[cat] || "📦"} {cat}</div>
+                          <div className="wh-material-group-label">{categoryLabel(cat)}</div>
                           {list.map((i) => (
                             <button
                               type="button"
@@ -1935,7 +1939,7 @@ function ReceiveForm({ items, receipts = [], purchaseOptions = [], initialMode =
             <label>
               Категория
               <select value={category} onChange={(e) => setCategory(e.target.value)}>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                {CATEGORIES.map((c) => <option key={c} value={c}>{categoryLabel(c)}</option>)}
               </select>
             </label>
             <label>
@@ -2071,7 +2075,7 @@ function EditItemForm({ item, onSave, onClose }) {
         <label>
           Категория
           <select value={category} onChange={(e) => setCategory(e.target.value)}>
-            {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            {CATEGORIES.map((c) => <option key={c} value={c}>{categoryLabel(c)}</option>)}
           </select>
         </label>
         <label>
@@ -2395,7 +2399,7 @@ function IssueView({ items, issues, objects, checklists = [], role, onIssue, onA
                       {materialGroups.length === 0 && <div className="wh-empty">Ничего не найдено</div>}
                       {materialGroups.map(([cat, list]) => (
                         <div key={cat}>
-                          <div className="wh-material-group-label">{CATEGORY_EMOJI[cat] || "📦"} {cat}</div>
+                          <div className="wh-material-group-label">{categoryLabel(cat)}</div>
                           {list.map((i) => (
                             <button
                               type="button"
@@ -3249,7 +3253,7 @@ function ReportView({ items, issues, role, markupRate, onMarkupChange }) {
           {byCategory.length === 0 && <div className="wh-empty">Нет данных за период</div>}
           {byCategory.map((c) => (
             <div className="wh-bar-row" key={c.cat}>
-              <span className="wh-cat-tag">{c.cat}</span>
+              <span className="wh-cat-tag">{categoryLabel(c.cat)}</span>
               <div className="wh-bar-track">
                 <div className="wh-bar-fill wh-bar-fill-alt" style={{ width: `${(c.cost / maxCatCost) * 100}%` }} />
               </div>
@@ -3545,7 +3549,7 @@ function ChecklistsView({ checklists, items = [], objects, onCreate, onDelete, o
               style={{ width: "100%", boxSizing: "border-box", padding: "11px 14px", borderRadius: 12, border: "1.5px solid var(--muted-2)", background: "#fff", fontSize: 14 }}
             >
               <option value="">Не связывать — отмечать вручную</option>
-              {itemOptions.map((it) => (<option key={it.id} value={it.id}>{it.name}{it.category === "3D" ? " (3D)" : ""}</option>))}
+              {itemOptions.map((it) => (<option key={it.id} value={it.id}>{it.name}{it.category === "3D" ? ` (${categoryLabel(it.category)})` : ""}</option>))}
             </select>
             <button type="button" className="wh-btn-primary" style={{ justifyContent: "center" }} onClick={create} disabled={!newTitle.trim() || !stagesText.trim()}>
               <Plus size={15} /> Создать чек-лист
@@ -3687,7 +3691,7 @@ function ChecklistsView({ checklists, items = [], objects, onCreate, onDelete, o
           style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 12, border: "1.5px solid var(--muted-2)", background: "#fff", fontSize: 14 }}
         >
           <option value="">Не связано — отмечаю вручную</option>
-          {itemOptions.map((it) => (<option key={it.id} value={it.id}>{it.name}{it.category === "3D" ? " (3D)" : ""}</option>))}
+          {itemOptions.map((it) => (<option key={it.id} value={it.id}>{it.name}{it.category === "3D" ? ` (${categoryLabel(it.category)})` : ""}</option>))}
         </select>
       </div>
 
